@@ -14,6 +14,7 @@ import {
   Shield,
   ChevronRight,
   Activity,
+  UserPlus,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -66,6 +67,12 @@ const navItems: NavItem[] = [
         href: '/settings/audit-log',
         icon: ClipboardList,
         roles: ['ADMIN', 'SUPERVISOR'],
+      },
+      {
+        title: 'User Management',
+        href: '/settings/users',
+        icon: UserPlus,
+        roles: ['ADMIN'],
       },
     ],
   },
@@ -143,6 +150,7 @@ export function Sidebar() {
                   {item.children!.map((child) => {
                     if (!canAccess(child)) return null;
                     const isChildActive = pathname === child.href;
+
                     return (
                       <Link
                         key={child.href}
