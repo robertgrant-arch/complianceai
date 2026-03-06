@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth-helpers';
 import { apiRateLimit } from '@/lib/rate-limit';
@@ -6,6 +7,27 @@ import { createAuditLog, AuditActions, getIpAddress } from '@/lib/audit';
 import { Prisma, CallStatus, CallDirection, FlagType } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
+
+// Fix-8 (Medium): Zod schema validates and bounds all query parameters.
+const callsQuerySchema = z.object({
+  // Fix-8: search capped at 200 characters to prevent DB query abuse
+  search: z.string().max(200, 'search must be 200 characters or fewer').optional().default(''),
+  status: z.string().optional().default(''),
+  agentId: z.string().optional().default(''),
+  campaign: z.string().max(200).optional().default(''),
+  direction: z.string().optional().default(''),
+  dateFrom: z.string().optional().default(''),
+  dateTo: z.string().optional().default(''),
+  minScore: z.coerce.number().int().min(0).max(100).optional(),
+  maxScore: z.coerce.number().int().min(0).max(100).optional(),
+  flagType: z.string().optional().default(''),
+  sortBy: z.string().optional().default('startTime'),
+  sortOrder: z.enum(['asc', 'desc']).optional().default('desc'),
+  // Fix-8: page capped at 10,000 to prevent offset attacks
+  page: z.coerce.number().int().min(1).max(10_000).optional().default(1),
+  // Fix-8: pageSize capped at 100 to prevent large payload attacks
+  limit: z.coerce.number().int().min(1).max(100).optional().default(25),
+});
 
 export async function GET(req: NextRequest) {
   // Rate limiting
@@ -16,24 +38,38 @@ export async function GET(req: NextRequest) {
     const session = await requireAuth();
     const { searchParams } = new URL(req.url);
 
-    // Pagination
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
-    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '25')));
-    const skip = (page - 1) * limit;
+    // Fix-8: Parse and validate all query params with Zod
+    const parseResult = callsQuerySchema.safeParse({
+      search: searchParams.get('search') ?? undefined,
+      status: searchParams.get('status') ?? undefined,
+      agentId: searchParams.get('agentId') ?? undefined,
+      campaign: searchParams.get('campaign') ?? undefined,
+      direction: searchParams.get('direction') ?? undefined,
+      dateFrom: searchParams.get('dateFrom') ?? undefined,
+      dateTo: searchParams.get('dateTo') ?? undefined,
+      minScore: searchParams.get('minScore') ?? undefined,
+      maxScore: searchParams.get('maxScore') ?? undefined,
+      flagType: searchParams.get('flagType') ?? undefined,
+      sortBy: searchParams.get('sortBy') ?? undefined,
+      sortOrder: searchParams.get('sortOrder') ?? undefined,
+      page: searchParams.get('page') ?? undefined,
+      limit: searchParams.get('limit') ?? undefined,
+    });
 
-    // Filters
-    const search = searchParams.get('search') || '';
-    const status = searchParams.get('status') || '';
-    const agentId = searchParams.get('agentId') || '';
-    const campaign = searchParams.get('campaign') || '';
-    const direction = searchParams.get('direction') || '';
-    const dateFrom = searchParams.get('dateFrom') || '';
-    const dateTo = searchParams.get('dateTo') || '';
-    const minScore = searchParams.get('minScore') ? parseInt(searchParams.get('minScore')!) : undefined;
-    const maxScore = searchParams.get('maxScore') ? parseInt(searchParams.get('maxScore')!) : undefined;
-    const flagType = searchParams.get('flagType') || '';
-    const sortBy = searchParams.get('sortBy') || 'startTime';
-    const sortOrder = (searchParams.get('sortOrder') || 'desc') as 'asc' | 'desc';
+    if (!parseResult.success) {
+      return NextResponse.json(
+        { error: 'Invalid query parameters', details: parseResult.error.flatten().fieldErrors },
+        { status: 400 }
+      );
+    }
+
+    const {
+      search, status, agentId, campaign, direction,
+      dateFrom, dateTo, minScore, maxScore, flagType,
+      sortBy, sortOrder, page, limit,
+    } = parseResult.data;
+
+    const skip = (page - 1) * limit;
 
     // Build where clause
     const where: Prisma.CallRecordWhereInput = {};
@@ -63,7 +99,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Score filter requires joining audit_results
+    // Score / flag filters
     if (minScore !== undefined || maxScore !== undefined || flagType) {
       where.auditResult = {};
       if (minScore !== undefined) where.auditResult.overallScore = { gte: minScore };
@@ -105,9 +141,8 @@ export async function GET(req: NextRequest) {
               sentimentCustomer: true,
             },
           },
-          transcript: {
-            select: { id: true, wordCount: true },
-          },
+          // Fix-13: transcript removed from list query — it is only needed on the
+          // call detail page and adds unnecessary JOIN overhead to the list endpoint.
         },
         orderBy: sortBy === 'score'
           ? { auditResult: { overallScore: sortOrder } }
