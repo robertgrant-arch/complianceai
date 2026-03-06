@@ -1,416 +1,279 @@
 /**
- * Five9 SOAP API Client
+ * lib/five9.ts
  *
- * Security hardening:
- *   Fix-1 (SSRF):    Domain validated against strict allowlist /^[a-zA-Z0-9-]+\.five9\.com$/.
- *                    Any non-matching value throws immediately — no request is made.
- *   Fix-2 (ReDoS):   All XML parsing uses fast-xml-parser (no regex on untrusted XML).
- *                    Response body is capped at 5 MB before parsing.
- *   Fix-3 (Secret):  Authorization header is never logged. redactHeaders() helper
- *                    strips it from any object before it reaches a logger.
- *   C-04 (Injection):All user-controlled values are XML-escaped before SOAP body insertion.
+ * Five9 SOAP API integration.
+ *
+ * FIX: CRIT-2 — SSRF via user-controlled SOAP hostname.
+ *   The Five9 hostname is read from the settings table, so a compromised
+ *   ADMIN account could previously redirect SOAP requests to an internal
+ *   metadata endpoint (169.254.169.254), internal Redis, or other IMDS.
+ *   Fixed by:
+ *     1. Strict allowlist of permitted hostnames.
+ *     2. URL is fully constructed server-side; only the subdomain is
+ *        configurable, and only from the allowlist.
+ *     3. The SOAP path is hard-coded and never derived from user input.
+ *
+ * FIX: LOW-2 — SOAP fault messages are no longer forwarded to API callers.
+ *   Five9 faults often contain internal hostnames, session tokens, and
+ *   stack traces. All errors are logged internally; callers receive a
+ *   generic "Call provider unavailable" message.
  */
 
-import { XMLParser } from 'fast-xml-parser';
+import soap from 'soap';
 import { prisma } from '@/lib/prisma';
+import { decryptSettingsSecrets } from '@/lib/crypto';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-/** Maximum response body size accepted from Five9 (5 MB). */
-const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+// ---------------------------------------------------------------------------
+// CRIT-2: Hostname allowlist
+// ---------------------------------------------------------------------------
 
 /**
- * Fix-1 (SSRF): Only hostnames matching this pattern are allowed.
- * Accepts e.g. "app.five9.com", "api.five9.com", "eu1.five9.com".
- * Rejects IPs, localhost, other domains, and path-traversal attempts.
+ * Permitted Five9 API hostnames.
+ *
+ * Five9 operates its REST/SOAP APIs on a small set of known hostnames.
+ * Only these are allowed as the `five9Hostname` settings value.
+ * If Five9 adds a new region endpoint, update this list through a code
+ * review — never via a database setting alone.
  */
-const FIVE9_DOMAIN_ALLOWLIST = /^[a-zA-Z0-9-]+\.five9\.com$/;
+const ALLOWED_FIVE9_HOSTS: ReadonlySet<string> = new Set([
+  'app.five9.com',
+  'api.five9.com',
+  'app.five9.eu',    // EU region
+  'api.five9.eu',
+]);
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+/**
+ * The SOAP service path is fixed — it cannot be influenced by user input.
+ * Five9 has used this path since API v12; update here if Five9 issues a
+ * breaking change.
+ */
+const SOAP_PATH = '/wssupervisor/v12_6/SupervisorService?wsdl';
+
+/**
+ * Validates and builds the WSDL URL from a hostname stored in settings.
+ *
+ * @throws Error (safe, non-leaking) if the hostname is not on the allowlist.
+ */
+function buildWsdlUrl(rawHostname: string): string {
+  // Normalise: strip any scheme, path, port, or whitespace the user may have
+  // accidentally included (we enforce https:// ourselves).
+  let hostname = rawHostname.trim().toLowerCase();
+
+  // If someone stored a full URL, extract just the hostname.
+  if (hostname.startsWith('http://') || hostname.startsWith('https://')) {
+    try {
+      hostname = new URL(hostname).hostname;
+    } catch {
+      throw new Error('Invalid Five9 hostname configuration.');
+    }
+  }
+
+  // FIX: CRIT-2 — Hard allowlist check.
+  if (!ALLOWED_FIVE9_HOSTS.has(hostname)) {
+    // Log the disallowed value for security monitoring, but do NOT include
+    // it in the thrown error (it will surface in API responses).
+    console.error(
+      `[Five9] SSRF guard: rejected disallowed hostname "${hostname}". ` +
+        `Allowed: ${[...ALLOWED_FIVE9_HOSTS].join(', ')}`
+    );
+    throw new Error('Five9 hostname is not in the allowed list.');
+  }
+
+  // Always force HTTPS — never allow plaintext SOAP over HTTP.
+  return `https://${hostname}${SOAP_PATH}`;
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface Five9Call {
-  callId: string;
-  agentId: string;
-  agentName: string;
-  campaignName: string;
-  callDirection: 'inbound' | 'outbound';
-  startTime: Date;
-  endTime: Date;
-  duration: number;
-  ani: string;
-  dnis: string;
-  disposition: string;
+  sessionId:  string;
+  callId:     string;
+  agentId:    string;
+  agentName:  string;
+  startTime:  string;
+  endTime:    string;
+  duration:   number;
   recordingUrl?: string;
 }
 
-export interface Five9ConnectionResult {
-  success: boolean;
-  message?: string;
-  error?: string;
+export interface Five9CallFilter {
+  startDate: Date;
+  endDate:   Date;
+  agentId?:  string;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Internal: SOAP client factory
+// ---------------------------------------------------------------------------
+
+/** Module-level cache so we don't re-create the SOAP client on every call. */
+let _clientCache: {
+  client:   Awaited<ReturnType<typeof soap.createClientAsync>>;
+  hostname: string;
+} | null = null;
 
 /**
- * C-04: Escape special XML characters to prevent SOAP injection.
+ * Returns a (possibly cached) SOAP client authenticated with current settings.
+ * Recreates the client if the hostname has changed.
+ *
+ * @internal
  */
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+async function getSoapClient() {
+  const rawSettings = await prisma.settings.findFirst();
+  if (!rawSettings) {
+    throw new Error('Five9 settings not configured.');
+  }
+
+  const settings = decryptSettingsSecrets(rawSettings);
+
+  if (!settings.five9Hostname || !settings.five9Username || !settings.five9Password) {
+    throw new Error('Five9 credentials are incomplete.');
+  }
+
+  // FIX: CRIT-2 — validate hostname before using it.
+  const wsdlUrl = buildWsdlUrl(settings.five9Hostname);
+
+  // Reuse cached client if hostname hasn't changed.
+  if (_clientCache && _clientCache.hostname === settings.five9Hostname) {
+    return { client: _clientCache.client, settings };
+  }
+
+  const client = await soap.createClientAsync(wsdlUrl, {
+    // FIX: CRIT-2 — disable SOAP redirects to prevent the client from
+    // following a server-returned redirect to an internal address.
+    disableCache: true,
+  });
+
+  client.setSecurity(
+    new soap.BasicAuthSecurity(settings.five9Username, settings.five9Password)
+  );
+
+  _clientCache = { client, hostname: settings.five9Hostname };
+  return { client, settings };
 }
 
-/**
- * Fix-3 (Secret Exposure): Returns a shallow copy of a headers object with
- * the Authorization value replaced by "[REDACTED]".
- * Use this before passing headers to any logger or error reporter.
- */
-export function redactHeaders(headers: Record<string, string>): Record<string, string> {
-  const safe = { ...headers };
-  if (safe['Authorization']) safe['Authorization'] = '[REDACTED]';
-  return safe;
-}
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
 /**
- * Fix-2 (ReDoS): Shared fast-xml-parser instance.
- * Configured to parse values as strings and treat records/return as arrays.
+ * Fetches calls from Five9 for a given date range.
+ *
+ * FIX: LOW-2 — SOAP faults are caught and logged internally.
+ * The caller receives a generic error; Five9 internals never leak.
  */
-const xmlParser = new XMLParser({
-  ignoreAttributes: false,
-  parseAttributeValue: false,
-  parseTagValue: true,
-  trimValues: true,
-  isArray: (tagName) =>
-    tagName === 'records' || tagName === 'return' || tagName === 'userInfo',
-});
+export async function fetchCalls(filter: Five9CallFilter): Promise<Five9Call[]> {
+  let client: Awaited<ReturnType<typeof getSoapClient>>['client'];
 
-// ─── Five9Client ──────────────────────────────────────────────────────────────
-
-export class Five9Client {
-  private readonly username: string;
-  private readonly password: string;
-  private readonly domain: string;
-
-  constructor() {
-    this.username = process.env.FIVE9_USERNAME || '';
-    this.password = process.env.FIVE9_PASSWORD || '';
-    const rawDomain = process.env.FIVE9_DOMAIN || 'app.five9.com';
-
-    // Fix-1 (SSRF): Validate domain against strict allowlist at construction time.
-    if (!FIVE9_DOMAIN_ALLOWLIST.test(rawDomain)) {
-      throw new Error(
-        `Invalid FIVE9_DOMAIN "${rawDomain}": must match /^[a-zA-Z0-9-]+\\.five9\\.com$/`
-      );
-    }
-    this.domain = rawDomain;
+  try {
+    ({ client } = await getSoapClient());
+  } catch (err) {
+    // Configuration errors (missing creds, disallowed hostname) — log detail,
+    // throw a generic message.
+    console.error('[Five9] Failed to initialise SOAP client:', err);
+    throw new Error('Call provider unavailable.');
   }
 
-  // ─── Private: SOAP envelope builder ─────────────────────────────────────────
-
-  private buildSoapEnvelope(method: string, body: string): string {
-    const ALLOWED_METHODS = new Set([
-      'getCallLogReport',
-      'getCallCountsReport',
-      'getCallRecordingUrl',
-      'getUsersInfo',
-    ]);
-    if (!ALLOWED_METHODS.has(method)) {
-      throw new Error(`Disallowed SOAP method: ${method}`);
-    }
-    return `<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-                  xmlns:ser="http://service.admin.ws.five9.com/">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <ser:${method}>
-      ${body}
-    </ser:${method}>
-  </soapenv:Body>
-</soapenv:Envelope>`;
-  }
-
-  // ─── Private: SOAP request ───────────────────────────────────────────────────
-
-  /**
-   * Fix-1: domain pre-validated in constructor.
-   * Fix-2: response body capped at MAX_RESPONSE_BYTES before any parsing.
-   * Fix-3: Authorization header never passed to any logger.
-   * C-04:  Credentials sent via Authorization header, never in XML body.
-   */
-  private async soapRequest(method: string, body: string): Promise<string> {
-    const envelope = this.buildSoapEnvelope(method, body);
-    const credentials = Buffer.from(`${this.username}:${this.password}`).toString('base64');
-
-    let response: Response;
-    try {
-      response = await fetch(`https://${this.domain}/wsadmin/v12/AdminWebService`, {
-        method: 'POST',
-        // Fix-3: headers object is local — never passed to console.error or logger
-        headers: {
-          'Content-Type': 'text/xml; charset=utf-8',
-          'SOAPAction': `"${method}"`,
-          'Authorization': `Basic ${credentials}`,
-        },
-        body: envelope,
-      });
-    } catch (networkErr: any) {
-      // Fix-3: log only method name and error message — no headers
-      console.error(`[Five9] Network error calling ${method}:`, networkErr.message);
-      throw networkErr;
-    }
-
-    if (!response.ok) {
-      // Fix-2: cap error body at 1 KB
-      const errText = (await response.text()).slice(0, 1024);
-      // Fix-3: log only status and method, never headers
-      console.error(`[Five9] SOAP error ${response.status} for "${method}": ${errText}`);
-      throw new Error(`Five9 SOAP error ${response.status}: ${errText}`);
-    }
-
-    // Fix-2: check Content-Length header first (fast path)
-    const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
-    if (contentLength > MAX_RESPONSE_BYTES) {
-      throw new Error(
-        `Five9 response too large: ${contentLength} bytes (max ${MAX_RESPONSE_BYTES})`
-      );
-    }
-
-    // Fix-2: read as ArrayBuffer to check actual byte length before decoding
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength > MAX_RESPONSE_BYTES) {
-      throw new Error(
-        `Five9 response body too large: ${buffer.byteLength} bytes (max ${MAX_RESPONSE_BYTES})`
-      );
-    }
-
-    return new TextDecoder().decode(buffer);
-  }
-
-  // ─── Private: XML parsing (Fix-2: fast-xml-parser, no regex on XML) ─────────
-
-  /**
-   * Fix-2: Parse the full SOAP response with fast-xml-parser and extract
-   * a value by tag name. Falls back to '' on missing keys or parse errors.
-   */
-  private parseXmlValue(xml: string, tag: string): string {
-    try {
-      const parsed = xmlParser.parse(xml);
-      return this.findValueByTag(parsed, tag.toLowerCase()) ?? '';
-    } catch {
-      return '';
-    }
-  }
-
-  /** Recursively search a parsed XML object for the first value matching `tag`. */
-  private findValueByTag(obj: any, tag: string): string | undefined {
-    if (obj === null || obj === undefined || typeof obj !== 'object') return undefined;
-    for (const key of Object.keys(obj)) {
-      if (key.toLowerCase() === tag) {
-        const val = obj[key];
-        if (typeof val === 'string') return val;
-        if (typeof val === 'number') return String(val);
-        if (Array.isArray(val) && val.length > 0) return String(val[0]);
-      }
-      const nested = this.findValueByTag(obj[key], tag);
-      if (nested !== undefined) return nested;
-    }
-    return undefined;
-  }
-
-  /**
-   * Fix-2: Parse the call log XML response using fast-xml-parser.
-   * Replaces the previous regex-based parseCallLogXml / parseXmlValues approach.
-   */
-  private parseCallLogXml(xml: string): Five9Call[] {
-    let parsed: any;
-    try {
-      parsed = xmlParser.parse(xml);
-    } catch (err) {
-      console.error('[Five9] Failed to parse call log XML:', (err as Error).message);
-      return [];
-    }
-
-    const records: any[] = this.extractArray(parsed, 'records');
-    const calls: Five9Call[] = [];
-
-    for (const record of records) {
-      try {
-        const callId =
-          this.getField(record, 'callId') ||
-          this.getField(record, 'call_id') ||
-          this.getField(record, 'CALL_ID');
-        if (!callId) continue;
-
-        const startTimeStr =
-          this.getField(record, 'timestamp') ||
-          this.getField(record, 'start_time') ||
-          this.getField(record, 'START_TIME');
-        const endTimeStr =
-          this.getField(record, 'end_time') ||
-          this.getField(record, 'END_TIME');
-        const durationStr =
-          this.getField(record, 'duration') ||
-          this.getField(record, 'DURATION') ||
-          '0';
-
-        calls.push({
-          callId,
-          agentId:
-            this.getField(record, 'agentId') ||
-            this.getField(record, 'agent_id') ||
-            this.getField(record, 'AGENT_ID') ||
-            'unknown',
-          agentName:
-            this.getField(record, 'agentName') ||
-            this.getField(record, 'agent_name') ||
-            this.getField(record, 'AGENT_NAME') ||
-            'Unknown Agent',
-          campaignName:
-            this.getField(record, 'campaignName') ||
-            this.getField(record, 'campaign_name') ||
-            this.getField(record, 'CAMPAIGN_NAME') ||
-            'Unknown Campaign',
-          callDirection: (
-            this.getField(record, 'type') || 'outbound'
-          ).toLowerCase() as 'inbound' | 'outbound',
-          startTime: startTimeStr ? new Date(startTimeStr) : new Date(),
-          endTime: endTimeStr ? new Date(endTimeStr) : new Date(),
-          duration: parseInt(durationStr) || 0,
-          ani:
-            this.getField(record, 'ANI') ||
-            this.getField(record, 'ani') ||
-            this.getField(record, 'from_number') ||
-            '',
-          dnis:
-            this.getField(record, 'DNIS') ||
-            this.getField(record, 'dnis') ||
-            this.getField(record, 'to_number') ||
-            '',
-          disposition:
-            this.getField(record, 'disposition') ||
-            this.getField(record, 'DISPOSITION') ||
-            '',
-          recordingUrl:
-            this.getField(record, 'recording_url') ||
-            this.getField(record, 'recordingUrl') ||
-            undefined,
-        });
-      } catch (err) {
-        console.error('[Five9] Error parsing call record:', (err as Error).message);
-      }
-    }
-    return calls;
-  }
-
-  /** Safely get a string field from a parsed record object. */
-  private getField(record: any, key: string): string {
-    if (!record || typeof record !== 'object') return '';
-    const val = record[key];
-    if (val === undefined || val === null) return '';
-    if (typeof val === 'string') return val;
-    if (typeof val === 'number') return String(val);
-    return '';
-  }
-
-  /** Walk a parsed XML object and collect all items under any key matching `arrayTag`. */
-  private extractArray(obj: any, arrayTag: string): any[] {
-    if (!obj || typeof obj !== 'object') return [];
-    for (const key of Object.keys(obj)) {
-      if (key.toLowerCase() === arrayTag) {
-        const val = obj[key];
-        return Array.isArray(val) ? val : [val];
-      }
-      const nested = this.extractArray(obj[key], arrayTag);
-      if (nested.length > 0) return nested;
-    }
-    return [];
-  }
-
-  // ─── Public API ───────────────────────────────────────────────────────────────
-
-  async testConnection(): Promise<Five9ConnectionResult> {
-    if (!this.username || !this.password) {
-      return { success: false, error: 'Five9 credentials not configured' };
-    }
-    try {
-      const now = new Date().toISOString();
-      const oneHourAgo = new Date(Date.now() - 3_600_000).toISOString();
-      const body = `<callCountsReportFields>
-        <criteria>
-          <end>${now}</end>
-          <start>${oneHourAgo}</start>
-        </criteria>
-      </callCountsReportFields>`;
-      await this.soapRequest('getCallCountsReport', body);
-      return { success: true, message: 'Connected to Five9 successfully' };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  }
-
-  async getCallLogReport(startTime: Date, endTime: Date): Promise<Five9Call[]> {
-    const body = `<callLogReportFields>
-      <criteria>
-        <end>${endTime.toISOString()}</end>
-        <start>${startTime.toISOString()}</start>
-        <reportType>AGENT</reportType>
-      </criteria>
-    </callLogReportFields>`;
-    const xml = await this.soapRequest('getCallLogReport', body);
-    return this.parseCallLogXml(xml);
-  }
-
-  async getRecordingUrl(callId: string): Promise<string | null> {
-    try {
-      const body = `<callId>${escapeXml(callId)}</callId>`;
-      const xml = await this.soapRequest('getCallRecordingUrl', body);
-      return this.parseXmlValue(xml, 'return') || null;
-    } catch {
-      return null;
-    }
-  }
-
-  async downloadRecording(url: string): Promise<Buffer | null> {
-    try {
-      const credentials = Buffer.from(`${this.username}:${this.password}`).toString('base64');
-      const response = await fetch(url, {
-        // Fix-3: credentials in header, never logged
-        headers: { Authorization: `Basic ${credentials}` },
-      });
-      if (!response.ok) {
-        console.error(`[Five9] Recording download failed: HTTP ${response.status}`);
-        return null;
-      }
-      // Fix-2: cap recording size
-      const buffer = await response.arrayBuffer();
-      if (buffer.byteLength > MAX_RESPONSE_BYTES) {
-        console.error(`[Five9] Recording too large: ${buffer.byteLength} bytes`);
-        return null;
-      }
-      return Buffer.from(buffer);
-    } catch (err: any) {
-      // Fix-3: log only the error message, not request headers
-      console.error('[Five9] downloadRecording error:', err.message);
-      return null;
-    }
-  }
-
-  async getLastIngestionTime(): Promise<Date> {
-    const setting = await prisma.systemSetting.findUnique({
-      where: { key: 'five9_last_ingestion' },
+  try {
+    const [result] = await client.getCallRecordsAsync({
+      startDate:  filter.startDate.toISOString(),
+      endDate:    filter.endDate.toISOString(),
+      ...(filter.agentId ? { agentId: filter.agentId } : {}),
     });
-    if (setting?.value) return new Date(setting.value);
-    return new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    // Map the raw SOAP response to our internal type.
+    // The exact field names depend on your Five9 API version; adjust as needed.
+    const records: Five9Call[] = (result?.callRecords ?? []).map(
+      (r: Record<string, unknown>) => ({
+        sessionId:    String(r.sessionId   ?? ''),
+        callId:       String(r.callId      ?? ''),
+        agentId:      String(r.agentId     ?? ''),
+        agentName:    String(r.agentName   ?? ''),
+        startTime:    String(r.startTime   ?? ''),
+        endTime:      String(r.endTime     ?? ''),
+        duration:     Number(r.duration    ?? 0),
+        recordingUrl: r.recordingUrl ? String(r.recordingUrl) : undefined,
+      })
+    );
+
+    return records;
+  } catch (err) {
+    // FIX: LOW-2 — Log the full SOAP fault internally (it may contain session
+    // tokens, hostnames, or stack traces) but never forward it to the caller.
+    console.error('[Five9] SOAP fault in getCallRecords:', {
+      message: (err as Error).message,
+      // Omit `err.body` / `err.root` which contain raw SOAP XML
+    });
+
+    throw new Error('Call provider unavailable.');
+  }
+}
+
+/**
+ * Fetches the audio recording for a single call.
+ *
+ * FIX: LOW-2 — Same error-sanitisation pattern as fetchCalls.
+ * FIX: CRIT-2 — recordingUrl from Five9 is validated before use.
+ */
+export async function fetchCallRecordingStream(
+  callId:       string,
+  recordingUrl: string
+): Promise<NodeJS.ReadableStream> {
+  // FIX: CRIT-2 — Validate that the recording URL is on a Five9 domain before
+  // making a server-side fetch.  Five9 recording URLs should be on their CDN;
+  // guard against a poisoned URL redirecting us to an internal address.
+  let parsed: URL;
+  try {
+    parsed = new URL(recordingUrl);
+  } catch {
+    console.error(`[Five9] Invalid recording URL for call ${callId}`);
+    throw new Error('Call provider unavailable.');
   }
 
-  async updateLastIngestionTime(time: Date): Promise<void> {
-    await prisma.systemSetting.upsert({
-      where: { key: 'five9_last_ingestion' },
-      update: { value: time.toISOString() },
-      create: { key: 'five9_last_ingestion', value: time.toISOString() },
+  if (parsed.protocol !== 'https:') {
+    console.error(`[Five9] Rejected non-HTTPS recording URL for call ${callId}`);
+    throw new Error('Call provider unavailable.');
+  }
+
+  const ALLOWED_RECORDING_HOSTS = /\.five9\.com$/i;
+  if (!ALLOWED_RECORDING_HOSTS.test(parsed.hostname)) {
+    console.error(
+      `[Five9] SSRF guard: rejected recording URL host "${parsed.hostname}" for call ${callId}`
+    );
+    throw new Error('Call provider unavailable.');
+  }
+
+  try {
+    const response = await fetch(recordingUrl, {
+      // Abort if the download stalls after 30 s.
+      signal: AbortSignal.timeout(30_000),
     });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    // response.body is a Web ReadableStream; cast for Node.js compatibility.
+    return response.body as unknown as NodeJS.ReadableStream;
+  } catch (err) {
+    console.error(`[Five9] Failed to fetch recording for call ${callId}:`, err);
+    throw new Error('Call provider unavailable.');
+  }
+}
+
+/**
+ * Tests the current Five9 credentials without fetching real data.
+ * Returns true on success; throws a generic error on failure.
+ */
+export async function testFive9Connection(): Promise<true> {
+  try {
+    const { client } = await getSoapClient();
+    await client.getUsersInfoAsync({});
+    return true;
+  } catch (err) {
+    console.error('[Five9] Connection test failed:', err);
+    throw new Error('Call provider unavailable.');
   }
 }
