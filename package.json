@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "nrisma generate && prisma db push && npm run create-admin && next build",
+    "build": "prisma generate && prisma db push && npm run create-admin && next build",
     "start": "next start",
     "lint": "next lint",
     "db:generate": "prisma generate",
