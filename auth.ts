@@ -2,23 +2,28 @@
  * auth.ts
  *
  * FIX: HIGH-5
- *   - bcrypt cost factor raised to 12 (was default ~10)
- *   - Account lockout after 5 consecutive failures (15-minute window)
- *   - Timing-safe: same error message for "user not found" and "wrong password"
- *   - Lockout fields (failedLoginCount, lockedUntil) read from DB; login resets them on success
+ * - bcrypt cost factor raised to 12 (was default ~10)
+ * - Account lockout after 5 consecutive failures (15-minute window)
+ * - Timing-safe: same error message for "user not found" and "wrong password"
+ * - Lockout fields (failedLoginCount, lockedUntil) read from DB; login resets them on success
+ *
+ * Google SSO:
+ * - Users pre-registered via admin User Management can sign in with Google
+ * - Only emails already in the DB are allowed (no open registration)
+ * - On first Google sign-in, password field is left as-is (placeholder)
  *
  * Prisma schema additions required:
- *   model User {
- *     ...
- *     failedLoginCount  Int       @default(0)
- *     lockedUntil       DateTime?
- *   }
+ * model User {
+ *   ...
+ *   failedLoginCount Int      @default(0)
+ *   lockedUntil      DateTime?
+ * }
  *
- * Run:  npx prisma migrate dev --name add_login_lockout_fields
+ * Run: npx prisma migrate dev --name add_login_lockout_fields
  */
-
 import NextAuth, { type DefaultSession } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
+import GoogleProvider from 'next-auth/providers/google';
 import * as bcrypt from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 
@@ -100,10 +105,17 @@ async function recordFailedAttempt(userId: string, currentCount: number): Promis
 // ---------------------------------------------------------------------------
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
+    // ── Google SSO Provider ─────────────────────────────────────────────
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+
+    // ── Credentials Provider (existing) ─────────────────────────────────
     CredentialsProvider({
       name: 'credentials',
       credentials: {
-        email:    { label: 'Email',    type: 'email'    },
+        email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' },
       },
 
@@ -119,14 +131,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const user = await prisma.user.findUnique({
           where: { email: credentials.email as string },
           select: {
-            id:               true,
-            email:            true,
-            name:             true,
-            role:             true,
-            password:         true,
-            isActive:         true,
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+            password: true,
+            isActive: true,
             failedLoginCount: true,
-            lockedUntil:      true,
+            lockedUntil: true,
           },
         });
 
@@ -186,10 +198,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         prisma.auditLog
           .create({
             data: {
-              userId:   user.id,
-              action:   'LOGIN',
+              userId: user.id,
+              action: 'LOGIN',
               resource: 'auth',
-              details:  { method: 'credentials', email: user.email },
+              details: { method: 'credentials', email: user.email },
             },
           })
           .catch((err: unknown) => {
@@ -197,34 +209,79 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           });
 
         return {
-          id:    user.id,
+          id: user.id,
           email: user.email,
-          name:  user.name,
-          role:  user.role as string,
+          name: user.name,
+          role: user.role as string,
         };
       },
     }),
   ],
 
   callbacks: {
+    // ── signIn callback — gate Google SSO to pre-registered users ──────
+    async signIn({ user, account }) {
+      if (account?.provider === 'google') {
+        // Only allow Google sign-in for users already in the database
+        const dbUser = await prisma.user.findUnique({
+          where: { email: user.email! },
+          select: { id: true, isActive: true },
+        });
+
+        if (!dbUser || !dbUser.isActive) {
+          // Reject — email not pre-registered or account deactivated
+          return false;
+        }
+
+        // Audit log for SSO login
+        prisma.auditLog
+          .create({
+            data: {
+              userId: dbUser.id,
+              action: 'LOGIN',
+              resource: 'auth',
+              details: { method: 'google_sso', email: user.email },
+            },
+          })
+          .catch((err: unknown) => {
+            console.error('[Auth] Failed to create SSO audit log:', err);
+          });
+
+        return true;
+      }
+      return true;
+    },
+
     // ── JWT callback ─────────────────────────────────────────────────────
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
       // Initial sign-in: seed the token from the user object.
       if (user) {
-        token.id            = user.id   as string;
-        token.role          = user.role as string;
+        // For Google SSO, look up the DB user to get id and role
+        if (account?.provider === 'google') {
+          const dbUser = await prisma.user.findUnique({
+            where: { email: user.email! },
+            select: { id: true, role: true },
+          });
+          if (dbUser) {
+            token.id = dbUser.id;
+            token.role = dbUser.role;
+          }
+        } else {
+          token.id = user.id as string;
+          token.role = user.role as string;
+        }
         token.roleCheckedAt = Date.now();
         return token;
       }
 
       // Subsequent requests: revalidate role & active status on interval.
-      const now       = Date.now();
+      const now = Date.now();
       const lastCheck = (token.roleCheckedAt as number | undefined) ?? 0;
 
       if (now - lastCheck > ROLE_REVALIDATION_INTERVAL_MS) {
         try {
           const dbUser = await prisma.user.findUnique({
-            where:  { id: token.id as string },
+            where: { id: token.id as string },
             select: { role: true, isActive: true },
           });
 
@@ -233,7 +290,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             return null as any; // eslint-disable-line @typescript-eslint/no-explicit-any
           }
 
-          token.role          = dbUser.role as string;
+          token.role = dbUser.role as string;
           token.roleCheckedAt = now;
         } catch (err) {
           // Do not invalidate a valid session on a transient DB error;
@@ -251,7 +308,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // ── Session callback ─────────────────────────────────────────────────
     async session({ session, token }) {
       if (token) {
-        session.user.id   = token.id   as string;
+        session.user.id = token.id as string;
         session.user.role = token.role as string;
       }
       return session;
@@ -260,12 +317,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
   pages: {
     signIn: '/login',
-    error:  '/login',
+    error: '/login',
   },
 
   session: {
     strategy: 'jwt',
-    maxAge:   24 * 60 * 60, // 24 hours
+    maxAge: 24 * 60 * 60, // 24 hours
   },
 
   secret: process.env.NEXTAUTH_SECRET,
