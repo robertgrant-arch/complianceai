@@ -32,20 +32,20 @@ export async function GET(req: NextRequest) {
 
       // Completed calls
       prisma.callRecord.count({
-        where: { status: 'complete', startTime: { gte: startDate } },
+        where: { status: 'COMPLETED', startTime: { gte: startDate } },
       }),
 
       // Pending calls
       prisma.callRecord.count({
         where: {
-          status: { in: ['pending', 'transcribing', 'analyzing'] },
+          status: { in: ['PENDING', 'TRANSCRIBING', 'ANALYZING'] },
           startTime: { gte: startDate },
         },
       }),
 
       // Error calls
       prisma.callRecord.count({
-        where: { status: 'error', startTime: { gte: startDate } },
+        where: { status: 'ERROR', startTime: { gte: startDate } },
       }),
 
       // Average scores

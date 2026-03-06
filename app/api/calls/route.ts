@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth-helpers';
 import { apiRateLimit } from '@/lib/rate-limit';
 import { createAuditLog, AuditActions, getIpAddress } from '@/lib/audit';
-import { Prisma } from '@prisma/client';
+import { Prisma, CallStatus, CallDirection, FlagType } from '@prisma/client';
 
 export async function GET(req: NextRequest) {
   // Rate limiting
@@ -46,10 +46,10 @@ export async function GET(req: NextRequest) {
       ];
     }
 
-    if (status) where.status = status;
+    if (status) where.status = status as CallStatus;
     if (agentId) where.agentId = agentId;
     if (campaign) where.campaignName = { contains: campaign, mode: 'insensitive' };
-    if (direction) where.callDirection = direction;
+    if (direction) where.callDirection = direction as CallDirection;
 
     if (dateFrom || dateTo) {
       where.startTime = {};
@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
       }
       if (flagType) {
         where.auditResult.auditFlags = {
-          some: { type: flagType },
+          some: { type: flagType as FlagType },
         };
       }
     }

@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScoreGauge } from '@/components/shared/score-gauge';
 import { FlagBadge } from '@/components/shared/flag-badge';
+import { WithErrorBoundary } from '@/components/shared/error-boundary';
 import { formatDateTime, formatDate, getScoreBg } from '@/lib/utils';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -173,6 +174,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Score Overview */}
+      <WithErrorBoundary label="Score Overview">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Score gauges */}
         <Card>
@@ -272,7 +274,10 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      </WithErrorBoundary>
+
       {/* Charts row */}
+      <WithErrorBoundary label="Charts">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Calls over time */}
         <Card>
@@ -339,7 +344,10 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      </WithErrorBoundary>
+
       {/* Bottom row: Top agents + Recent flags */}
+      <WithErrorBoundary label="Agents & Flags">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Top agents */}
         <Card>
@@ -424,6 +432,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+      </WithErrorBoundary>
     </div>
   );
 }

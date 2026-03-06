@@ -4,7 +4,6 @@ import { downloadFile } from '@/lib/s3';
 import { analysisQueue } from '../queues';
 import type { TranscriptionJobData, AnalysisJobData } from '../queues';
 import OpenAI from 'openai';
-import { Readable } from 'stream';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -26,10 +25,10 @@ export async function processTranscription(job: Job<TranscriptionJobData>): Prom
   console.log(`[Transcription] Processing call ${callId}`);
   await job.updateProgress(10);
 
-  // Update status
+  // Update status to TRANSCRIBING (C-06: uppercase enum)
   await prisma.callRecord.update({
     where: { id: callId },
-    data: { status: 'transcribing' },
+    data: { status: 'TRANSCRIBING' },
   });
 
   let tempFilePath: string | null = null;
@@ -59,14 +58,14 @@ export async function processTranscription(job: Job<TranscriptionJobData>): Prom
     // Process segments with speaker diarization (simplified)
     const segments = processSegments(transcriptionResponse, agentName);
 
-    // Save transcript to database
+    // Save transcript to database (C-06: model name is callTranscript)
     const transcript = await prisma.callTranscript.create({
       data: {
         callRecordId: callId,
         fullText: transcriptionResponse.text,
         segments: JSON.stringify(segments),
         language: transcriptionResponse.language || 'en',
-        durationSeconds: transcriptionResponse.duration || duration,
+        durationSeconds: (transcriptionResponse as any).duration || duration,
         wordCount: transcriptionResponse.text.split(/\s+/).length,
       },
     });
@@ -79,7 +78,7 @@ export async function processTranscription(job: Job<TranscriptionJobData>): Prom
       select: { campaignName: true, duration: true },
     });
 
-    // Queue for AI analysis
+    // Queue for AI analysis — cast job name to string for BullMQ v5 NameType
     const analysisJobData: AnalysisJobData = {
       callId,
       transcriptId: transcript.id,
@@ -88,12 +87,12 @@ export async function processTranscription(job: Job<TranscriptionJobData>): Prom
       duration: callRecord?.duration || duration,
     };
 
-    await analysisQueue.add(`analyze-${callId}`, analysisJobData);
+    await analysisQueue.add(`analyze-${callId}` as string, analysisJobData);
 
-    // Update call status
+    // Update call status to ANALYZING (C-06: uppercase enum)
     await prisma.callRecord.update({
       where: { id: callId },
-      data: { status: 'analyzing' },
+      data: { status: 'ANALYZING' },
     });
 
     await job.updateProgress(100);
@@ -101,9 +100,10 @@ export async function processTranscription(job: Job<TranscriptionJobData>): Prom
   } catch (error: any) {
     console.error(`[Transcription] Error for call ${callId}:`, error.message);
 
+    // Update status to ERROR (C-06: uppercase enum)
     await prisma.callRecord.update({
       where: { id: callId },
-      data: { status: 'error' },
+      data: { status: 'ERROR' },
     });
 
     throw error;
@@ -118,12 +118,13 @@ export async function processTranscription(job: Job<TranscriptionJobData>): Prom
 }
 
 /**
- * Process Whisper segments and assign speakers
- * Uses simple heuristics: agent speaks first, alternates with customer
+ * Process Whisper segments and assign speakers.
+ * Uses simple heuristics: agent speaks first, alternates with customer on pause.
+ * In production, replace with a proper diarization model (e.g., pyannote.audio).
  */
 function processSegments(
   transcription: any,
-  agentName: string
+  agentName: string,
 ): TranscriptSegment[] {
   const rawSegments = transcription.segments || [];
 
@@ -138,7 +139,6 @@ function processSegments(
   }
 
   // Simple speaker assignment based on pause detection
-  // In production, use a proper diarization model (e.g., pyannote)
   const segments: TranscriptSegment[] = [];
   let currentSpeaker = agentName;
   let lastEndTime = 0;

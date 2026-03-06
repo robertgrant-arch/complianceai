@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
@@ -266,6 +267,22 @@ export default function SettingsPage() {
                 />
               </div>
 
+              {/* H-05: System prompt editor — loaded from DB, editable without code deploy */}
+              <div className="space-y-1.5">
+                <Label>Compliance Auditor System Prompt</Label>
+                <p className="text-xs text-muted-foreground">
+                  This prompt is sent to GPT-4o as the system message. Edit it to customize scoring
+                  criteria, required disclosures, or industry-specific compliance rules.
+                  Changes take effect on the next call processed.
+                </p>
+                <Textarea
+                  value={settings.compliance_auditor_prompt || ''}
+                  onChange={(e) => setSettings((p: any) => ({ ...p, compliance_auditor_prompt: e.target.value }))}
+                  placeholder="You are an expert compliance auditor..."
+                  className="min-h-[200px] font-mono text-xs"
+                />
+              </div>
+
               <Button
                 onClick={() => handleSave({
                   openai_api_key: settings.openai_api_key,
@@ -273,6 +290,7 @@ export default function SettingsPage() {
                   gpt_model: settings.gpt_model,
                   worker_concurrency: settings.worker_concurrency,
                   enable_diarization: settings.enable_diarization,
+                  compliance_auditor_prompt: settings.compliance_auditor_prompt,
                 })}
                 disabled={saving}
                 className="gap-2"

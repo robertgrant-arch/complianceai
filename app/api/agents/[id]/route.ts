@@ -39,7 +39,7 @@ export async function GET(
     }
 
     // Calculate stats
-    const completedCalls = calls.filter((c) => c.status === 'complete');
+    const completedCalls = calls.filter((c) => c.status === 'COMPLETED');
     const auditedCalls = completedCalls.filter((c) => c.auditResult);
 
     const avgScore = auditedCalls.length > 0

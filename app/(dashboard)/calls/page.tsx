@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import {
@@ -20,6 +20,79 @@ import { formatDateTime, formatDuration, getScoreBg, buildQueryString, debounce 
 
 const CAMPAIGNS = ['Medicare Advantage', 'Part D', 'Supplement', 'Medicaid', 'ACA Plans'];
 const STATUS_OPTIONS = ['pending', 'transcribing', 'analyzing', 'complete', 'error'];
+
+/**
+ * M-03: Memoized call row — only re-renders when the call object reference changes.
+ * Prevents all 25 rows from re-rendering on sort/filter state changes.
+ */
+const CallRow = memo(function CallRow({ call }: { call: any }) {
+  return (
+    <tr className="border-b border-border hover:bg-muted/30 transition-colors">
+      <td className="px-4 py-3">
+        <div>
+          <p className="text-xs font-medium">{formatDateTime(call.startTime)}</p>
+          <div className="flex items-center gap-1 mt-0.5">
+            {call.callDirection === 'inbound' ? (
+              <PhoneIncoming className="w-3 h-3 text-green-400" />
+            ) : (
+              <PhoneOutgoing className="w-3 h-3 text-blue-400" />
+            )}
+            <span className="text-xs text-muted-foreground capitalize">{call.callDirection}</span>
+          </div>
+        </div>
+      </td>
+      <td className="px-4 py-3">
+        <Link href={`/agents/${call.agentId}`} className="text-sm font-medium hover:text-primary transition-colors">
+          {call.agentName}
+        </Link>
+      </td>
+      <td className="px-4 py-3 hidden md:table-cell">
+        <span className="text-xs text-muted-foreground">{call.campaignName}</span>
+      </td>
+      <td className="px-4 py-3 hidden lg:table-cell">
+        <span className="text-xs text-muted-foreground">
+          {call.duration ? formatDuration(call.duration) : '\u2014'}
+        </span>
+      </td>
+      <td className="px-4 py-3">
+        <StatusBadge status={call.status} />
+      </td>
+      <td className="px-4 py-3">
+        {call.auditResult ? (
+          <span className={`text-sm font-bold px-2 py-0.5 rounded-md ${getScoreBg(call.auditResult.overallScore)}`}>
+            {call.auditResult.overallScore}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">\u2014</span>
+        )}
+      </td>
+      <td className="px-4 py-3 hidden xl:table-cell">
+        {call.auditResult?._count?.auditFlags > 0 ? (
+          <span className="text-xs text-muted-foreground">
+            {call.auditResult._count.auditFlags} flag{call.auditResult._count.auditFlags !== 1 ? 's' : ''}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">\u2014</span>
+        )}
+      </td>
+      <td className="px-4 py-3 hidden lg:table-cell">
+        {call.auditResult?.recommendedAction && call.auditResult.recommendedAction !== 'NONE' && (
+          <Badge
+            variant={call.auditResult.recommendedAction === 'ESCALATE' ? 'critical' : 'warning'}
+            className="text-xs capitalize"
+          >
+            {call.auditResult.recommendedAction.toLowerCase()}
+          </Badge>
+        )}
+      </td>
+      <td className="px-4 py-3">
+        <Link href={`/calls/${call.id}`}>
+          <Button variant="ghost" size="xs" className="text-xs">Review</Button>
+        </Link>
+      </td>
+    </tr>
+  );
+});
 
 export default function CallExplorerPage() {
   const router = useRouter();
@@ -345,80 +418,8 @@ export default function CallExplorerPage() {
                   </td>
                 </tr>
               ) : (
-                calls.map((call) => (
-                  <tr
-                    key={call.id}
-                    className="border-b border-border hover:bg-muted/30 transition-colors"
-                  >
-                    <td className="px-4 py-3">
-                      <div>
-                        <p className="text-xs font-medium">{formatDateTime(call.startTime)}</p>
-                        <div className="flex items-center gap-1 mt-0.5">
-                          {call.callDirection === 'inbound' ? (
-                            <PhoneIncoming className="w-3 h-3 text-green-400" />
-                          ) : (
-                            <PhoneOutgoing className="w-3 h-3 text-blue-400" />
-                          )}
-                          <span className="text-xs text-muted-foreground capitalize">{call.callDirection}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link
-                        href={`/agents/${call.agentId}`}
-                        className="text-sm font-medium hover:text-primary transition-colors"
-                      >
-                        {call.agentName}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 hidden md:table-cell">
-                      <span className="text-xs text-muted-foreground">{call.campaignName}</span>
-                    </td>
-                    <td className="px-4 py-3 hidden lg:table-cell">
-                      <span className="text-xs text-muted-foreground">
-                        {call.duration ? formatDuration(call.duration) : '—'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={call.status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      {call.auditResult ? (
-                        <span className={`text-sm font-bold px-2 py-0.5 rounded-md ${getScoreBg(call.auditResult.overallScore)}`}>
-                          {call.auditResult.overallScore}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 hidden xl:table-cell">
-                      {call.auditResult?._count?.auditFlags > 0 ? (
-                        <span className="text-xs text-muted-foreground">
-                          {call.auditResult._count.auditFlags} flag{call.auditResult._count.auditFlags !== 1 ? 's' : ''}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 hidden lg:table-cell">
-                      {call.auditResult?.recommendedAction && call.auditResult.recommendedAction !== 'none' && (
-                        <Badge
-                          variant={call.auditResult.recommendedAction === 'escalation' ? 'critical' : 'warning'}
-                          className="text-xs capitalize"
-                        >
-                          {call.auditResult.recommendedAction}
-                        </Badge>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link href={`/calls/${call.id}`}>
-                        <Button variant="ghost" size="xs" className="text-xs">
-                          Review
-                        </Button>
-                      </Link>
-                    </td>
-                  </tr>
-                ))
+                /* M-03: Use memoized CallRow to prevent unnecessary re-renders */
+                calls.map((call) => <CallRow key={call.id} call={call} />)
               )}
             </tbody>
           </table>

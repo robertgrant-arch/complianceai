@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
       const start = startTime ? new Date(startTime) : new Date(Date.now() - 24 * 60 * 60 * 1000);
       const end = endTime ? new Date(endTime) : new Date();
 
-      const job = await ingestionQueue.add('manual-ingestion', {
+      const job = await ingestionQueue.add('manual-ingestion' as string, {
         startTime: start.toISOString(),
         endTime: end.toISOString(),
         triggeredBy: session.user.id,

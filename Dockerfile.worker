@@ -18,5 +18,8 @@ RUN npx prisma generate
 # Set environment
 ENV NODE_ENV=production
 
-# Use ts-node with tsconfig-paths for @ path alias resolution
+# C-05: Set TS_NODE_PROJECT so ts-node uses tsconfig.worker.json which has
+# the correct CommonJS module setting and @/* path alias resolution.
+ENV TS_NODE_PROJECT=tsconfig.worker.json
+
 CMD ["node", "-r", "ts-node/register", "-r", "tsconfig-paths/register", "worker/index.ts"]
