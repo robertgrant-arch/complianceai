@@ -12,7 +12,8 @@
     "db:push": "prisma db push",
     "db:seed": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/seed.ts",
     "worker": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' worker/index.ts",
-    "worker:dev": "nodemon --exec ts-node --compiler-options '{\"module\":\"CommonJS\"}' worker/index.ts"
+    "worker:dev": "nodemon --exec ts-node --compiler-options '{\"module\":\"CommonJS\"}' worker/index.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.540.0",
@@ -58,7 +59,8 @@
     "tailwind-merge": "^2.2.2",
     "tailwindcss-animate": "^1.0.7",
     "wavesurfer.js": "^7.7.11",
-    "zod": "^3.22.4"
+    "zod": "^3.22.4",
+    "prisma": "^5.11.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -72,7 +74,6 @@
     "eslint-config-next": "14.1.4",
     "nodemon": "^3.1.0",
     "postcss": "^8.4.38",
-    "prisma": "^5.11.0",
     "tailwindcss": "^3.4.1",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
