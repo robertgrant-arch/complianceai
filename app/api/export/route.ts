@@ -13,6 +13,8 @@ import { requireAuth } from '@/lib/auth-helpers';
 import { createAuditLog, AuditActions, getIpAddress } from '@/lib/audit';
 import { format } from 'date-fns';
 
+export const dynamic = 'force-dynamic';
+
 const BATCH_SIZE = 500;
 
 function escapeCsvField(value: unknown): string {

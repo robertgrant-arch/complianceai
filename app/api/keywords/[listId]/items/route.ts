@@ -15,6 +15,8 @@ import { requireRole } from '@/lib/auth-helpers';
 import { createAuditLog, AuditActions, getIpAddress } from '@/lib/audit';
 import { randomUUID } from 'crypto';
 
+export const dynamic = 'force-dynamic';
+
 interface KeywordItem {
   id: string;
   word: string;

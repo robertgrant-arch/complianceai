@@ -4,6 +4,8 @@ import { requireAuth } from '@/lib/auth-helpers';
 import { getSignedDownloadUrl } from '@/lib/s3';
 import { createAuditLog, AuditActions, getIpAddress } from '@/lib/audit';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }

@@ -5,6 +5,8 @@ import { apiRateLimit } from '@/lib/rate-limit';
 import { createAuditLog, AuditActions, getIpAddress } from '@/lib/audit';
 import { Prisma, CallStatus, CallDirection, FlagType } from '@prisma/client';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
   // Rate limiting
   const rateLimitResult = await apiRateLimit(req);

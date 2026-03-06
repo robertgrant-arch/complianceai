@@ -4,6 +4,8 @@ import { requireRole } from '@/lib/auth-helpers';
 import { createAuditLog, AuditActions, getIpAddress } from '@/lib/audit';
 import { subDays } from 'date-fns';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
   try {
     await requireRole(['ADMIN']);
