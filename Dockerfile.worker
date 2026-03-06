@@ -1,0 +1,22 @@
+FROM node:20-alpine
+
+# Install system dependencies
+RUN apk add --no-cache libc6-compat openssl
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+RUN npm ci --legacy-peer-deps
+
+# Copy source
+COPY . .
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Set environment
+ENV NODE_ENV=production
+
+# Use ts-node with tsconfig-paths for @ path alias resolution
+CMD ["node", "-r", "ts-node/register", "-r", "tsconfig-paths/register", "worker/index.ts"]

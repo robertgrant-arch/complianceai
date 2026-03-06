@@ -1,0 +1,179 @@
+// ComplianceAI Prisma Schema
+// PostgreSQL database schema for the compliance auditing platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  SUPERVISOR
+  AUDITOR
+  VIEWER
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      UserRole @default(VIEWER)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+model CallRecord {
+  id            String    @id @default(cuid())
+  five9CallId   String    @unique
+  agentId       String
+  agentName     String
+  campaignName  String
+  callDirection String    @default("outbound") // inbound | outbound
+  ani           String?
+  dnis          String?
+  startTime     DateTime
+  endTime       DateTime?
+  duration      Int?      // seconds
+  disposition   String?
+  s3Key         String?   // S3/MinIO key for audio file
+  status        String    @default("pending") // pending | transcribing | analyzing | completed | error
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  notes         String?   @db.Text
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  transcript  CallTranscript?
+  auditResult AuditResult?
+
+  @@index([agentId])
+  @@index([status])
+  @@index([startTime])
+  @@index([campaignName])
+  @@map("call_records")
+}
+
+model CallTranscript {
+  id              String   @id @default(cuid())
+  callRecordId    String   @unique
+  fullText        String   @db.Text
+  segments        Json     // Array of {speaker, startTime, endTime, text}
+  wordCount       Int      @default(0)
+  language        String   @default("en")
+  durationSeconds Float?
+  createdAt       DateTime @default(now())
+
+  callRecord CallRecord @relation(fields: [callRecordId], references: [id], onDelete: Cascade)
+
+  @@map("call_transcripts")
+}
+
+model AuditResult {
+  id                String   @id @default(cuid())
+  callRecordId      String   @unique
+  overallScore      Int      // 0-100
+  complianceScore   Int      // 0-100
+  toneScore         Int      // 0-100
+  qualityScore      Int      // 0-100
+  summary           String   @db.Text
+  recommendedAction String   @default("none") // none | coaching | review | escalate
+  sentimentAgent    String   @default("neutral") // positive | neutral | negative
+  sentimentCustomer String   @default("neutral")
+  topicsDiscussed   Json     @default("[]")
+  callOutcome       String?
+  aiModel           String   @default("gpt-4o")
+  createdAt         DateTime @default(now())
+
+  callRecord CallRecord  @relation(fields: [callRecordId], references: [id], onDelete: Cascade)
+  auditFlags AuditFlag[]
+
+  @@map("audit_results")
+}
+
+model AuditFlag {
+  id            String   @id @default(cuid())
+  auditResultId String
+  type          String   // CRITICAL | WARNING | INFO
+  category      String   // compliance | tone | keyword | quality | required | risk | competitor
+  description   String
+  timestamp     Float?   // seconds into the call
+  keyword       String?
+  quote         String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  auditResult AuditResult @relation(fields: [auditResultId], references: [id], onDelete: Cascade)
+
+  @@index([auditResultId])
+  @@index([type])
+  @@map("audit_flags")
+}
+
+model KeywordList {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  type        String   // prohibited | required | risk | competitor
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  keywords Keyword[]
+
+  @@map("keyword_lists")
+}
+
+model Keyword {
+  id              String   @id @default(cuid())
+  listId          String
+  word            String
+  isCaseSensitive Boolean  @default(false)
+  isRegex         Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  list KeywordList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  @@index([listId])
+  @@map("keywords")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  resource   String
+  resourceId String?
+  details    Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([resource])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
