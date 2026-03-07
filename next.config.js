@@ -38,7 +38,7 @@ const cspDirectives = [
   // Scripts: self only.
   // In production with nonce support (see middleware.ts) you can remove
   // 'unsafe-inline'; for now it's restricted to self.
-  "script-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
 
   // Styles: self + inline (many CSS-in-JS setups require unsafe-inline;
   // replace with nonce or hash once you audit).
