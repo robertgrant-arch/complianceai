@@ -234,3 +234,20 @@ model RetentionPolicy {
   @@unique([callStatus])
   @@map("retention_policies")
 }
+
+
+model Settings {
+  id               String   @id @default("singleton")
+  five9Hostname    String?
+  five9Username    String?
+  five9Password    String?  @db.Text
+  openAiKey        String?  @db.Text
+  slackWebhookUrl  String?  @db.Text
+  slackChannel     String?
+  notifyOnScore    Boolean  @default(false)
+  scoreThreshold   Int      @default(70)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("settings")
+}
