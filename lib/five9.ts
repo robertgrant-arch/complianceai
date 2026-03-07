@@ -301,8 +301,8 @@ export class Five9Client {
    * Download a recording from the given URL and return the full buffer.
    * Drains the Node.js Readable stream returned by fetchCallRecordingStream().
    */
-  async downloadRecording(url: string): Promise<Buffer> {
-    const stream = await fetchCallRecordingStream(url);
+  async downloadRecording(callId: string, recordingUrl: string): Promise<Buffer> {
+    const stream = await fetchCallRecordingStream(callId, recordingUrl);
     return new Promise<Buffer>((resolve, reject) => {
       const chunks: Buffer[] = [];
       stream.on('data', (chunk: Buffer) => chunks.push(chunk));
