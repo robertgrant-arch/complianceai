@@ -78,7 +78,7 @@ export async function processIngestion(job: Job<IngestionJobData>): Promise<void
       // Download and upload recording if available
       if (call.recordingUrl) {
         try {
-          const recordingBuffer = await five9.downloadRecording(call.recordingUrl);
+          const recordingBuffer = await five9.downloadRecording(call.callId, call.recordingUrl);
           if (recordingBuffer) {
             const s3Key = generateRecordingKey(call.agentId, call.callId, call.startTime);
             await uploadFile(s3Key, recordingBuffer, 'audio/wav');
