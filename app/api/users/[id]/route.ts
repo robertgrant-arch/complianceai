@@ -1,11 +1,13 @@
 /**
  * app/api/users/[id]/route.ts
  *
- * User Management API - single user operations, ADMIN only.
- * PATCH /api/users/:id  - Update user role, active status, or password
+ * User Management API — single user operations, ADMIN only.
+ * PATCH /api/users/:id  — Update user role, active status, or password
+ * DELETE /api/users/:id — Delete a user (cannot delete yourself)
  *
  * FIX: Added password reset support for admins
  * FIX: Role enum aligned with Prisma UserRole
+ * FEAT: Added DELETE endpoint for user removal
  */
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
@@ -91,7 +93,10 @@ export async function PATCH(
       resource: 'user',
       resourceId: user.id,
       details: {
-        changes: { ...parsed.data, password: parsed.data.password ? '[REDACTED]' : undefined },
+        changes: {
+          ...parsed.data,
+          password: parsed.data.password ? '[REDACTED]' : undefined,
+        },
         previousRole: existing.role,
         previousIsActive: existing.isActive,
         updatedBy: session.user.email,
@@ -99,6 +104,52 @@ export async function PATCH(
     });
 
     return Response.json({ user });
+  } catch (err) {
+    if (err instanceof ApiError) return err.toResponse();
+    throw err;
+  }
+}
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await requireRole('ADMIN');
+    const { id } = params;
+
+    // Prevent admin from deleting themselves
+    if (id === session.user.id) {
+      return Response.json(
+        { error: 'You cannot delete your own account' },
+        { status: 400 }
+      );
+    }
+
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      return Response.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    await prisma.user.delete({ where: { id } });
+
+    // Audit log
+    await createAuditLog({
+      userId: session.user.id,
+      action: AuditActions.DELETE,
+      resource: 'user',
+      resourceId: id,
+      details: {
+        deletedUser: {
+          email: existing.email,
+          name: existing.name,
+          role: existing.role,
+        },
+        deletedBy: session.user.email,
+      },
+    });
+
+    return Response.json({ success: true, message: `User ${existing.email} deleted` });
   } catch (err) {
     if (err instanceof ApiError) return err.toResponse();
     throw err;
