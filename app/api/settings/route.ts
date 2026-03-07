@@ -10,7 +10,7 @@
  *   - Credential rotation is recorded in the audit log (field names only,
  *     never values).
  *
- * FIX: HIGH-1 — Settings writes require SUPER_ADMIN (not just ADMIN).
+ * FIX: HIGH-1 — Settings writes require ADMIN (not just ADMIN).
  *   An ADMIN-level user swapping the OpenAI key to one they control would
  *   allow them to read all future transcript data via OpenAI's API logs.
  *
@@ -106,14 +106,14 @@ export async function GET(req: Request): Promise<Response> {
 
 /**
  * FIX: CRIT-1 — Secrets are encrypted before being written to the database.
- * FIX: HIGH-1 — Requires SUPER_ADMIN to prevent credential-swap attacks.
+ * FIX: HIGH-1 — Requires ADMIN to prevent credential-swap attacks.
  *
  * Audit log records which *fields* were changed, never their values.
  */
 export async function PUT(req: Request): Promise<Response> {
   let session;
   try {
-    session = await requireRole('SUPER_ADMIN');
+    session = await requireRole('ADMIN');
   } catch (err) {
     if (err instanceof ApiError) return err.toResponse();
     throw err;
@@ -181,13 +181,13 @@ export async function PUT(req: Request): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
-// DELETE — clear all settings (SUPER_ADMIN only)
+// DELETE — clear all settings (ADMIN only)
 // ---------------------------------------------------------------------------
 
 export async function DELETE(req: Request): Promise<Response> {
   let session;
   try {
-    session = await requireRole('SUPER_ADMIN');
+    session = await requireRole('ADMIN');
   } catch (err) {
     if (err instanceof ApiError) return err.toResponse();
     throw err;
