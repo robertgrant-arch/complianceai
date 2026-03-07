@@ -1,14 +1,19 @@
 /**
  * app/api/users/[id]/route.ts
  *
- * User Management API — single user operations, ADMIN only.
- * PATCH /api/users/:id  — Update user role or active status
+ * User Management API - single user operations, ADMIN only.
+ * PATCH /api/users/:id  - Update user role, active status, or password
+ *
+ * FIX: Added password reset support for admins
+ * FIX: Role enum aligned with Prisma UserRole
  */
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireRole, ApiError } from '@/lib/auth-helpers';
 import { createAuditLog, AuditActions } from '@/lib/audit';
 import { NextRequest } from 'next/server';
+import * as bcrypt from 'bcryptjs';
+import { BCRYPT_ROUNDS } from '@/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +21,7 @@ const UpdateUserSchema = z.object({
   role: z.enum(['ADMIN', 'SUPERVISOR', 'AUDITOR', 'VIEWER']).optional(),
   isActive: z.boolean().optional(),
   name: z.string().min(1).max(100).optional(),
+  password: z.string().min(8, 'Password must be at least 8 characters').optional(),
 });
 
 export async function PATCH(
@@ -60,6 +66,9 @@ export async function PATCH(
     if (parsed.data.role !== undefined) updateData.role = parsed.data.role;
     if (parsed.data.isActive !== undefined) updateData.isActive = parsed.data.isActive;
     if (parsed.data.name !== undefined) updateData.name = parsed.data.name;
+    if (parsed.data.password) {
+      updateData.password = await bcrypt.hash(parsed.data.password, BCRYPT_ROUNDS);
+    }
 
     const user = await prisma.user.update({
       where: { id },
@@ -82,7 +91,7 @@ export async function PATCH(
       resource: 'user',
       resourceId: user.id,
       details: {
-        changes: parsed.data,
+        changes: { ...parsed.data, password: parsed.data.password ? '[REDACTED]' : undefined },
         previousRole: existing.role,
         previousIsActive: existing.isActive,
         updatedBy: session.user.email,
