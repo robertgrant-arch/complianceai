@@ -95,11 +95,11 @@ export interface Five9Call {
   startTime:  string;
   endTime:    string;
   duration:   number;
-    callDirection?: string;
-  campaignName?: string;
-  ani?: string;
-  dnis?: string;
-  disposition?: string;
+    callDirection: string;
+  campaignName: string;
+  ani: string;
+  dnis: string;
+  disposition: string;
   recordingUrl?: string;
 }
 
@@ -198,11 +198,11 @@ export async function fetchCalls(filter: Five9CallFilter): Promise<Five9Call[]> 
         agentName:    String(r.agentName   ?? ''),
         startTime:    String(r.startTime   ?? ''),
         endTime:      String(r.endTime     ?? ''),
-                callDirection: r.callDirection ? String(r.callDirection) : undefined,
-        campaignName: r.campaignName ? String(r.campaignName) : undefined,
-        ani:          r.ani ? String(r.ani) : undefined,
-        dnis:         r.dnis ? String(r.dnis) : undefined,
-        disposition:  r.disposition ? String(r.disposition) : undefined,
+                callDirection: String(r.callDirection ?? ''),
+        campaignName: String(r.campaignName ?? ''),
+        ani:          String(r.ani ?? ''),
+        dnis:         String(r.dnis ?? ''),
+        disposition:  String(r.disposition ?? ''),
         duration:     Number(r.duration    ?? 0),
         recordingUrl: r.recordingUrl ? String(r.recordingUrl) : undefined,
       })
