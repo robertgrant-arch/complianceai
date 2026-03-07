@@ -10,7 +10,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─── Enums (C-06) ─────────────────────────────────────────────────────────────
+// --- Enums (C-06) ---
 
 enum UserRole {
   ADMIN
@@ -75,19 +75,20 @@ enum KeywordListType {
   COMPETITOR
 }
 
-// ─── Models ───────────────────────────────────────────────────────────────────
+// --- Models ---
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  password  String   // bcrypt hash, minimum 12 rounds (C-02)
-  role      UserRole @default(VIEWER)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  auditLogs AuditLog[]
+  id               String    @id @default(cuid())
+  email            String    @unique
+  name             String
+  password         String    // bcrypt hash, minimum 12 rounds (C-02)
+  role             UserRole  @default(VIEWER)
+  isActive         Boolean   @default(true)
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  auditLogs        AuditLog[]
 
   @@map("users")
 }
@@ -98,7 +99,7 @@ model CallRecord {
   agentId       String
   agentName     String
   campaignName  String
-  callDirection CallDirection @default(OUTBOUND) // C-06
+  callDirection CallDirection @default(OUTBOUND)
   ani           String?
   dnis          String?
   startTime     DateTime
@@ -106,7 +107,7 @@ model CallRecord {
   duration      Int?          // seconds
   disposition   String?
   s3Key         String?       // S3/MinIO key for audio file
-  status        CallStatus    @default(PENDING) // C-06
+  status        CallStatus    @default(PENDING)
   reviewedBy    String?
   reviewedAt    DateTime?
   notes         String?       @db.Text
@@ -120,19 +121,19 @@ model CallRecord {
   @@index([status])
   @@index([startTime])
   @@index([campaignName])
-  @@index([agentId, startTime]) // M-07: composite index for agent scorecard queries
+  @@index([agentId, startTime])
   @@map("call_records")
 }
 
 model CallTranscript {
-  id              String   @id @default(cuid())
-  callRecordId    String   @unique
-  fullText        String   @db.Text
-  segments        Json     // Array of TranscriptSegment {speaker, startTime, endTime, text}
-  wordCount       Int      @default(0)
-  language        String   @default("en")
+  id              String     @id @default(cuid())
+  callRecordId    String     @unique
+  fullText        String     @db.Text
+  segments        Json       // Array of TranscriptSegment
+  wordCount       Int        @default(0)
+  language        String     @default("en")
   durationSeconds Float?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime   @default(now())
 
   callRecord CallRecord @relation(fields: [callRecordId], references: [id], onDelete: Cascade)
 
@@ -147,15 +148,15 @@ model AuditResult {
   toneScore         Int               // 0-100
   qualityScore      Int               // 0-100
   summary           String            @db.Text
-  recommendedAction RecommendedAction @default(NONE) // C-06
-  sentimentAgent    Sentiment         @default(NEUTRAL) // C-06
-  sentimentCustomer Sentiment         @default(NEUTRAL) // C-06
+  recommendedAction RecommendedAction @default(NONE)
+  sentimentAgent    Sentiment         @default(NEUTRAL)
+  sentimentCustomer Sentiment         @default(NEUTRAL)
   topicsDiscussed   Json              @default("[]")
   callOutcome       String?
   aiModel           String            @default("gpt-4o")
   createdAt         DateTime          @default(now())
 
-  callRecord CallRecord  @relation(fields: [callRecordId], references: [id], onDelete: Cascade)
+  callRecord CallRecord @relation(fields: [callRecordId], references: [id], onDelete: Cascade)
   auditFlags AuditFlag[]
 
   @@map("audit_results")
@@ -164,10 +165,10 @@ model AuditResult {
 model AuditFlag {
   id            String       @id @default(cuid())
   auditResultId String
-  type          FlagType     // C-06
-  category      FlagCategory // C-06
+  type          FlagType
+  category      FlagCategory
   description   String
-  timestamp     Float?       // seconds into the call
+  timestamp     Float?
   keyword       String?
   quote         String?      @db.Text
   createdAt     DateTime     @default(now())
@@ -176,19 +177,17 @@ model AuditFlag {
 
   @@index([auditResultId])
   @@index([type])
-  @@index([auditResultId, type]) // M-07: composite index for flag queries
+  @@index([auditResultId, type])
   @@map("audit_flags")
 }
 
-/// H-01: Keywords stored as JSON array [{word, isCaseSensitive, isRegex}]
-/// Eliminates the separate Keyword table and join overhead.
 model KeywordList {
   id          String          @id @default(cuid())
   name        String
   description String?
-  type        KeywordListType // C-06 / H-01
+  type        KeywordListType
   isActive    Boolean         @default(true)
-  keywords    Json            @default("[]") // H-01: KeywordItem[]
+  keywords    Json            @default("[]")
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
@@ -223,10 +222,9 @@ model SystemSetting {
   @@map("system_settings")
 }
 
-/// H-09: Retention policy per call status type
 model RetentionPolicy {
   id           String   @id @default(cuid())
-  callStatus   String   // matches CallStatus enum values as strings
+  callStatus   String
   retainDays   Int
   deleteAudio  Boolean  @default(true)
   deleteRecord Boolean  @default(false)
