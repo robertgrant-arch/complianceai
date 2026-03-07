@@ -1,18 +1,20 @@
 /**
  * app/api/users/route.ts
  *
- * User Management API — ADMIN only.
- * GET  /api/users       — List all users (excludes password hash)
- * POST /api/users       — Create a new user (Google SSO — no password needed)
+ * User Management API - ADMIN only.
+ * GET  /api/users   - List all users (excludes password hash)
+ * POST /api/users   - Create a new user (with password OR Google SSO)
  *
- * Security: requireRole('ADMIN') on all endpoints.
- * Audit: All mutations logged via createAuditLog.
+ * FIX: POST now accepts optional password field for credential-based login
+ * FIX: Role enum aligned with Prisma UserRole
  */
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireRole, ApiError } from '@/lib/auth-helpers';
 import { createAuditLog, AuditActions } from '@/lib/audit';
 import { NextRequest } from 'next/server';
+import * as bcrypt from 'bcryptjs';
+import { BCRYPT_ROUNDS } from '@/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,6 +25,7 @@ const CreateUserSchema = z.object({
   email: z.string().email('Invalid email address'),
   name: z.string().min(1, 'Name is required').max(100),
   role: z.enum(['ADMIN', 'SUPERVISOR', 'AUDITOR', 'VIEWER']),
+  password: z.string().min(8, 'Password must be at least 8 characters').optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -58,6 +61,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const session = await requireRole('ADMIN');
+
     const body = await req.json();
     const parsed = CreateUserSchema.safeParse(body);
 
@@ -68,7 +72,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { email, name, role } = parsed.data;
+    const { email, name, role, password } = parsed.data;
 
     // Check for duplicate email
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -79,13 +83,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create user with no password — Google SSO only
+    // Hash password if provided, otherwise use Google SSO placeholder
+    let hashedPassword = '__GOOGLE_SSO__';
+    if (password) {
+      hashedPassword = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    }
+
     const user = await prisma.user.create({
       data: {
         email,
         name,
         role: role as any,
-        password: '__GOOGLE_SSO__', // Placeholder — user authenticates via Google
+        password: hashedPassword,
         isActive: true,
       },
       select: {
@@ -104,7 +113,13 @@ export async function POST(req: NextRequest) {
       action: AuditActions.CREATE,
       resource: 'user',
       resourceId: user.id,
-      details: { email, name, role, createdBy: session.user.email },
+      details: {
+        email,
+        name,
+        role,
+        authMethod: password ? 'credentials' : 'google_sso',
+        createdBy: session.user.email,
+      },
     });
 
     return Response.json({ user }, { status: 201 });
