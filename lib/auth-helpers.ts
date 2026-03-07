@@ -3,28 +3,17 @@
  *
  * Server-side authentication and authorisation helpers for Route Handlers
  * and Server Actions.
- *
- * FIX: ROLE_HIERARCHY aligned with Prisma UserRole enum
- * - Changed from ['AGENT', 'SUPERVISOR', 'ADMIN', 'SUPER_ADMIN']
- * - To ['VIEWER', 'AUDITOR', 'SUPERVISOR', 'ADMIN']
- * - AUDITOR and VIEWER users were silently failing every hasRole() check
- *
- * FIX: MED-5 - opaque error messages, no role/account detail leaked
  */
 import { auth } from '@/auth';
 import type { Session } from 'next-auth';
 
-// ---------------------------------------------------------------------------
 // Types
-// ---------------------------------------------------------------------------
 export type Role = 'VIEWER' | 'AUDITOR' | 'SUPERVISOR' | 'ADMIN';
 
 /** Ordered from least to most privileged - matches Prisma UserRole enum. */
 const ROLE_HIERARCHY: Role[] = ['VIEWER', 'AUDITOR', 'SUPERVISOR', 'ADMIN'];
 
-// ---------------------------------------------------------------------------
 // ApiError
-// ---------------------------------------------------------------------------
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -42,9 +31,7 @@ export class ApiError extends Error {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Role helpers
-// ---------------------------------------------------------------------------
 export function hasRole(userRole: string | undefined, required: Role): boolean {
   if (!userRole) return false;
   const userIdx = ROLE_HIERARCHY.indexOf(userRole as Role);
@@ -53,9 +40,7 @@ export function hasRole(userRole: string | undefined, required: Role): boolean {
   return userIdx >= requiredIdx;
 }
 
-// ---------------------------------------------------------------------------
 // requireAuth
-// ---------------------------------------------------------------------------
 export async function requireAuth(): Promise<Session> {
   const session = await auth();
   if (!session?.user?.id) {
@@ -64,30 +49,29 @@ export async function requireAuth(): Promise<Session> {
   return session;
 }
 
-// ---------------------------------------------------------------------------
-// requireRole
-// ---------------------------------------------------------------------------
-export async function requireRole(minRole: Role): Promise<Session> {
+// requireRole - accepts a single Role OR an array of Roles
+export async function requireRole(minRole: Role | Role[]): Promise<Session> {
   const session = await auth();
-
   if (!session?.user?.id) {
     throw new ApiError(401, 'Unauthorized');
   }
 
-  if (!hasRole(session.user.role, minRole)) {
-    console.warn(
-      `[Auth] requireRole("${minRole}"): user ${session.user.id} ` +
-      `has role "${session.user.role}" - access denied.`
-    );
-    throw new ApiError(403, 'Forbidden');
+  // If an array is passed, check if user has ANY of the listed roles (exact match or higher)
+  if (Array.isArray(minRole)) {
+    const hasAny = minRole.some((role) => hasRole(session.user.role, role));
+    if (!hasAny) {
+      throw new ApiError(403, 'Forbidden');
+    }
+  } else {
+    if (!hasRole(session.user.role, minRole)) {
+      throw new ApiError(403, 'Forbidden');
+    }
   }
 
   return session;
 }
 
-// ---------------------------------------------------------------------------
 // withAuth / withRole wrappers
-// ---------------------------------------------------------------------------
 type RouteHandler = (
   req: Request,
   context: { params: Record<string, string> },
@@ -106,7 +90,7 @@ export function withAuth(handler: RouteHandler) {
   };
 }
 
-export function withRole(minRole: Role, handler: RouteHandler) {
+export function withRole(minRole: Role | Role[], handler: RouteHandler) {
   return async (req: Request, context: { params: Record<string, string> }) => {
     try {
       const session = await requireRole(minRole);
