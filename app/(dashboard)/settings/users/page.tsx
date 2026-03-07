@@ -14,6 +14,7 @@
 //   Removed AGENT / SUPER_ADMIN, added AUDITOR.
 
 import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +44,9 @@ const roleBadgeClasses: Record<AppRole, string> = {
 // Component
 // ---------------------------------------------------------------------------
 export default function UsersSettingsPage() {
+  const { data: session } = useSession();
+  const currentUserId = (session?.user as any)?.id as string | undefined;
+
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -163,6 +167,39 @@ export default function UsersSettingsPage() {
   }
 
   // -------------------------------------------------------------------------
+  // Delete user
+  // -------------------------------------------------------------------------
+  async function deleteUser(user: User) {
+    // Prevent deleting yourself
+    if (user.id === currentUserId) {
+      setSubmitError("You cannot delete your own account.");
+      return;
+    }
+
+    // Confirmation dialog before proceeding
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${user.name}" (${user.email})? This action cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`/api/users/${user.id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to delete user.");
+      }
+
+      setSubmitSuccess(`User ${user.email} deleted successfully.`);
+      await fetchUsers();
+    } catch (err: any) {
+      setSubmitError(err.message);
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
   return (
@@ -234,12 +271,22 @@ export default function UsersSettingsPage() {
                     {new Date(user.createdAt).toLocaleDateString()}
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => toggleActive(user)}
-                      className="text-xs text-blue-600 hover:underline"
-                    >
-                      {user.isActive ? "Deactivate" : "Activate"}
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => toggleActive(user)}
+                        className="text-xs text-blue-600 hover:underline"
+                      >
+                        {user.isActive ? "Deactivate" : "Activate"}
+                      </button>
+                      <button
+                        onClick={() => deleteUser(user)}
+                        disabled={user.id === currentUserId}
+                        className="text-xs text-red-600 hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={user.id === currentUserId ? "You cannot delete your own account" : `Delete ${user.name}`}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
