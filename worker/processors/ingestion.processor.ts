@@ -65,8 +65,8 @@ export async function processIngestion(job: Job<IngestionJobData>): Promise<void
           agentName: call.agentName,
           campaignName: call.campaignName,
           callDirection: callDirection as any,
-          startTime: call.startTime,
-          endTime: call.endTime,
+          startTime: new Date(call.startTime),
+          endTime: new Date(call.endTime),
           duration: call.duration,
           ani: call.ani,
           dnis: call.dnis,
@@ -80,7 +80,7 @@ export async function processIngestion(job: Job<IngestionJobData>): Promise<void
         try {
           const recordingBuffer = await five9.downloadRecording(call.callId, call.recordingUrl);
           if (recordingBuffer) {
-            const s3Key = generateRecordingKey(call.agentId, call.callId, call.startTime);
+            const s3Key = generateRecordingKey(call.agentId, call.callId, new Date(call.startTime));
             await uploadFile(s3Key, recordingBuffer, 'audio/wav');
 
             // Single update: set s3Key and status together
