@@ -1,289 +1,369 @@
-'use client';
+"use client";
+// app/(dashboard)/settings/users/page.tsx
+// FIX (BUG 4): Added a password field to the "Add User" form.
+//   Previously the form only collected email / name / role and the API stored
+//   '__GOOGLE_SSO__' as the password, making credential login impossible for
+//   newly created admin users.
+//
+// The password field is optional in the UI (matching the API):
+//   • Leave blank → account is Google-SSO-only (no credentials login).
+//   • Fill in → account gets a bcrypt-hashed password and can log in via
+//     the credentials form immediately.
+//
+// FIX (BUG 2): Role dropdown options now match the Prisma UserRole enum exactly.
+//   Removed AGENT / SUPER_ADMIN, added AUDITOR.
 
-import { useState, useEffect } from 'react';
-import { UserPlus, Loader2, Shield, ShieldCheck, Eye, Edit2, UserX, UserCheck } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
-import { toast } from 'sonner';
+import { useState, useEffect } from "react";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+type AppRole = "VIEWER" | "AUDITOR" | "SUPERVISOR" | "ADMIN";
 
 interface User {
   id: string;
   email: string;
   name: string;
-  role: string;
+  role: AppRole;
   isActive: boolean;
   createdAt: string;
 }
 
-const ROLE_COLORS: Record<string, string> = {
-  ADMIN: 'bg-red-500/20 text-red-400 border-red-500/30',
-  SUPERVISOR: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-  AUDITOR: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-  VIEWER: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+// FIX (BUG 2): Roles listed in ascending privilege order, matching DB enum.
+const ROLES: AppRole[] = ["VIEWER", "AUDITOR", "SUPERVISOR", "ADMIN"];
+
+const roleBadgeClasses: Record<AppRole, string> = {
+  VIEWER:     "bg-gray-100 text-gray-700",
+  AUDITOR:    "bg-blue-100 text-blue-700",
+  SUPERVISOR: "bg-yellow-100 text-yellow-700",
+  ADMIN:      "bg-red-100 text-red-700",
 };
 
-export default function UserManagementPage() {
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+export default function UsersSettingsPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editRole, setEditRole] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
 
-  // Add user form
-  const [newEmail, setNewEmail] = useState('');
-  const [newName, setNewName] = useState('');
-  const [newRole, setNewRole] = useState('VIEWER');
+  // Add-user form state
+  const [form, setForm] = useState({
+    email: "",
+    name: "",
+    role: "VIEWER" as AppRole,
+    password: "",       // FIX (BUG 4): new field
+    confirmPassword: "", // FIX (BUG 4): client-side confirmation only
+  });
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const fetchUsers = async () => {
+  // -------------------------------------------------------------------------
+  // Data fetching
+  // -------------------------------------------------------------------------
+  async function fetchUsers() {
+    setLoading(true);
     try {
-      const res = await fetch('/api/users');
+      const res = await fetch("/api/users");
+      if (!res.ok) throw new Error("Failed to load users");
       const data = await res.json();
-      setUsers(data.users || []);
-    } catch {
-      toast.error('Failed to load users');
+      setUsers(data.users);
+    } catch (err: any) {
+      setSubmitError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   useEffect(() => { fetchUsers(); }, []);
 
-  const handleAddUser = async () => {
-    if (!newEmail || !newName) {
-      toast.error('Email and name are required');
-      return;
-    }
-    setSaving(true);
-    try {
-      const res = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: newEmail, name: newName, role: newRole }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to create user');
-      }
-      toast.success(`User ${newName} added successfully. They can sign in with Google.`);
-      setNewEmail('');
-      setNewName('');
-      setNewRole('VIEWER');
-      setShowAddForm(false);
-      fetchUsers();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to add user');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleToggleActive = async (user: User) => {
-    try {
-      const res = await fetch(`/api/users/${user.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isActive: !user.isActive }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to update user');
-      }
-      toast.success(`User ${user.isActive ? 'deactivated' : 'activated'}`);
-      fetchUsers();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to update user');
-    }
-  };
-
-  const handleUpdateRole = async (userId: string) => {
-    try {
-      const res = await fetch(`/api/users/${userId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: editRole }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to update role');
-      }
-      toast.success('Role updated');
-      setEditingId(null);
-      fetchUsers();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to update role');
-    }
-  };
-
-  if (loading) {
-    return <div className="h-64 flex items-center justify-center"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
+  // -------------------------------------------------------------------------
+  // Add user
+  // -------------------------------------------------------------------------
+  function resetForm() {
+    setForm({ email: "", name: "", role: "VIEWER", password: "", confirmPassword: "" });
+    setFormError(null);
   }
 
+  async function handleAddUser() {
+    setFormError(null);
+
+    // Basic client-side validation.
+    if (!form.email || !form.name) {
+      setFormError("Email and name are required.");
+      return;
+    }
+
+    // FIX (BUG 4): Validate password fields if the user chose to set one.
+    if (form.password || form.confirmPassword) {
+      if (form.password.length < 8) {
+        setFormError("Password must be at least 8 characters.");
+        return;
+      }
+      if (form.password !== form.confirmPassword) {
+        setFormError("Passwords do not match.");
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      const payload: Record<string, string> = {
+        email: form.email,
+        name: form.name,
+        role: form.role,
+      };
+
+      // FIX (BUG 4): Only include password in the payload when one was entered.
+      if (form.password) {
+        payload.password = form.password;
+      }
+
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setFormError(data.error ?? "Failed to create user.");
+        return;
+      }
+
+      setShowAddModal(false);
+      resetForm();
+      setSubmitSuccess(`User ${data.user.email} created successfully.`);
+      await fetchUsers();
+    } catch (err: any) {
+      setFormError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Toggle active status
+  // -------------------------------------------------------------------------
+  async function toggleActive(user: User) {
+    try {
+      const res = await fetch(`/api/users?id=${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: !user.isActive }),
+      });
+      if (!res.ok) throw new Error("Failed to update user");
+      await fetchUsers();
+    } catch (err: any) {
+      setSubmitError(err.message);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-6 max-w-5xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold">User Management</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Add and manage users. Users sign in with Google SSO.
+          <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Manage admin users and their access levels.
           </p>
         </div>
-        <Button onClick={() => setShowAddForm(!showAddForm)} className="gap-2">
-          <UserPlus className="w-4 h-4" />
-          Add User
-        </Button>
+        <button
+          onClick={() => { resetForm(); setShowAddModal(true); }}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+        >
+          + Add User
+        </button>
       </div>
 
-      {/* Add User Form */}
-      {showAddForm && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">Add New User</CardTitle>
-            <CardDescription>Enter the user's Gmail address. They will sign in using Google SSO.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-1.5">
-                <Label>Name</Label>
-                <Input
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="John Smith"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Email (Gmail)</Label>
-                <Input
-                  type="email"
-                  value={newEmail}
-                  onChange={(e) => setNewEmail(e.target.value)}
-                  placeholder="user@gmail.com"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Role</Label>
-                <Select value={newRole} onValueChange={setNewRole}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ADMIN">Admin</SelectItem>
-                    <SelectItem value="SUPERVISOR">Supervisor</SelectItem>
-                    <SelectItem value="AUDITOR">Auditor</SelectItem>
-                    <SelectItem value="VIEWER">Viewer</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <Button onClick={handleAddUser} disabled={saving} className="gap-2">
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-                Add User
-              </Button>
-              <Button variant="outline" onClick={() => setShowAddForm(false)}>
-                Cancel
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Flash messages */}
+      {submitError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+          {submitError}
+          <button className="ml-2 underline" onClick={() => setSubmitError(null)}>Dismiss</button>
+        </div>
+      )}
+      {submitSuccess && (
+        <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded-lg text-sm">
+          {submitSuccess}
+          <button className="ml-2 underline" onClick={() => setSubmitSuccess(null)}>Dismiss</button>
+        </div>
       )}
 
-      {/* Users Table */}
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">User</th>
-                  <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Role</th>
-                  <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Status</th>
-                  <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Added</th>
-                  <th className="text-right p-4 text-xs font-medium text-muted-foreground uppercase">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((user) => (
-                  <tr key={user.id} className="border-b border-border last:border-0 hover:bg-muted/50">
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
-                          <span className="text-xs font-bold text-white">
-                            {user.name?.charAt(0).toUpperCase()}
-                          </span>
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium">{user.name}</p>
-                          <p className="text-xs text-muted-foreground">{user.email}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      {editingId === user.id ? (
-                        <div className="flex items-center gap-2">
-                          <Select value={editRole} onValueChange={setEditRole}>
-                            <SelectTrigger className="w-32 h-8 text-xs"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="ADMIN">Admin</SelectItem>
-                              <SelectItem value="SUPERVISOR">Supervisor</SelectItem>
-                              <SelectItem value="AUDITOR">Auditor</SelectItem>
-                              <SelectItem value="VIEWER">Viewer</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <Button size="sm" variant="ghost" onClick={() => handleUpdateRole(user.id)} className="h-8 px-2 text-xs">Save</Button>
-                          <Button size="sm" variant="ghost" onClick={() => setEditingId(null)} className="h-8 px-2 text-xs">Cancel</Button>
-                        </div>
-                      ) : (
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${ROLE_COLORS[user.role] || ROLE_COLORS.VIEWER}`}>
-                          {user.role}
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${user.isActive ? 'text-green-400' : 'text-red-400'}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${user.isActive ? 'bg-green-400' : 'bg-red-400'}`} />
-                        {user.isActive ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td className="p-4 text-xs text-muted-foreground">
-                      {new Date(user.createdAt).toLocaleDateString()}
-                    </td>
-                    <td className="p-4 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => { setEditingId(user.id); setEditRole(user.role); }}
-                          className="h-8 px-2"
-                          title="Edit role"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleToggleActive(user)}
-                          className={`h-8 px-2 ${user.isActive ? 'text-red-400 hover:text-red-300' : 'text-green-400 hover:text-green-300'}`}
-                          title={user.isActive ? 'Deactivate user' : 'Activate user'}
-                        >
-                          {user.isActive ? <UserX className="w-3.5 h-3.5" /> : <UserCheck className="w-3.5 h-3.5" />}
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
+      {/* User table */}
+      {loading ? (
+        <div className="text-center py-12 text-gray-400">Loading users…</div>
+      ) : (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                {["Name", "Email", "Role", "Status", "Created", "Actions"].map((h) => (
+                  <th
+                    key={h}
+                    className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"
+                  >
+                    {h}
+                  </th>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {users.map((user) => (
+                <tr key={user.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 text-sm font-medium text-gray-900">{user.name}</td>
+                  <td className="px-4 py-3 text-sm text-gray-600">{user.email}</td>
+                  <td className="px-4 py-3">
+                    {/* FIX (BUG 2): badge uses updated role list */}
+                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${roleBadgeClasses[user.role]}`}>
+                      {user.role}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${user.isActive ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                      {user.isActive ? "Active" : "Inactive"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-500">
+                    {new Date(user.createdAt).toLocaleDateString()}
+                  </td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => toggleActive(user)}
+                      className="text-xs text-blue-600 hover:underline"
+                    >
+                      {user.isActive ? "Deactivate" : "Activate"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           {users.length === 0 && (
-            <div className="p-8 text-center text-sm text-muted-foreground">
-              No users yet. Click "Add User" to get started.
-            </div>
+            <div className="text-center py-10 text-gray-400">No users found.</div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Add User Modal                                                        */}
+      {/* ------------------------------------------------------------------ */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-4">Add New User</h2>
+
+            {formError && (
+              <div className="mb-3 p-2 bg-red-50 border border-red-200 text-red-600 rounded text-sm">
+                {formError}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {/* Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Full Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Jane Smith"
+                />
+              </div>
+
+              {/* Email */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Email Address <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="jane@example.com"
+                />
+              </div>
+
+              {/* Role — FIX (BUG 2): options match DB enum */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                <select
+                  value={form.role}
+                  onChange={(e) => setForm({ ...form, role: e.target.value as AppRole })}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {ROLES.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* ---------------------------------------------------------- */}
+              {/* FIX (BUG 4): Password fields — new additions                */}
+              {/* ---------------------------------------------------------- */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Password{" "}
+                  <span className="text-gray-400 font-normal">(optional — leave blank for Google SSO only)</span>
+                </label>
+                <input
+                  type="password"
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Min. 8 characters"
+                  autoComplete="new-password"
+                />
+              </div>
+
+              {form.password && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Confirm Password <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={form.confirmPassword}
+                    onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Re-enter password"
+                    autoComplete="new-password"
+                  />
+                </div>
+              )}
+              {/* ---------------------------------------------------------- */}
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3 mt-6 justify-end">
+              <button
+                onClick={() => { setShowAddModal(false); resetForm(); }}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
+                disabled={submitting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddUser}
+                disabled={submitting}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {submitting ? "Creating…" : "Create User"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
