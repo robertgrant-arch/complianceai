@@ -277,3 +277,60 @@ export async function testFive9Connection(): Promise<true> {
     throw new Error('Call provider unavailable.');
   }
 }
+
+
+// ─── Five9Client class ───────────────────────────────────────────────────────
+// Wraps the standalone SOAP functions above into a class interface so that
+// worker processors can use `new Five9Client()` with familiar method names.
+
+export class Five9Client {
+  private lastIngestionTime: Date | null = null;
+
+  /**
+   * Fetch call log records between two dates.
+   */
+  async getCallLogReport(startDate: Date, endDate: Date): Promise<Five9Call[]> {
+    const filter: Five9CallFilter = {
+      startDate,
+      endDate,
+    };
+    return fetchCalls(filter);
+  }
+
+  /**
+   * Download a recording from the given URL and return the full buffer.
+   * Drains the Node.js Readable stream returned by fetchCallRecordingStream().
+   */
+  async downloadRecording(url: string): Promise<Buffer> {
+    const stream = await fetchCallRecordingStream(url);
+    return new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', reject);
+    });
+  }
+
+  /**
+   * Persist the last-ingested timestamp in memory.
+   */
+  updateLastIngestionTime(date: Date): void {
+    this.lastIngestionTime = date;
+  }
+
+  getLastIngestionTime(): Date | null {
+    return this.lastIngestionTime;
+  }
+
+  /**
+   * Test Five9 SOAP credentials.
+   */
+  async testConnection(): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      await testFive9Connection();
+      return { success: true, message: 'Connection successful' };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+    }
+  }
+}
