@@ -98,7 +98,7 @@ transcriptionWorker.on('failed', async (job, err) => {
 // ─── Analysis Worker ──────────────────────────────────────────────────────────
 // Fix-10: Removed the redundant BullMQ limiter (max:20/60s) from the analysis
 // worker. It was redundant with concurrency:ANALYSIS_CONCURRENCY (default 3)
-// and added unnecessary latency. GPT-4o rate limits are handled at the OpenAI
+// and added unnecessary latency. Claude rate limits are handled at the Anthropic
 // client level via automatic retries with exponential backoff.
 const analysisWorker = new Worker(QUEUE_NAMES.ANALYSIS, processAnalysis, {
   connection: redisConnection,
