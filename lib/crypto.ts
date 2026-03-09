@@ -2,7 +2,7 @@
  * lib/crypto.ts
  *
  * AES-256-GCM envelope encryption for secrets stored in the database
- * (Five9 credentials, OpenAI keys, Slack webhooks).
+ * (Five9 credentials, Anthropic keys, Slack webhooks).
  *
  * FIX: CRIT-1 — Credentials stored/returned as plaintext
  *
