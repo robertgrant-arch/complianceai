@@ -199,12 +199,12 @@ export default function SettingsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-sm font-medium">AI Pipeline Configuration</CardTitle>
-              <CardDescription>Configure Whisper transcription and GPT-4o analysis</CardDescription>
+              <CardDescription>Configure AWS Transcribe and Claude analysis</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>OpenAI API Key</Label>
+                  <Label>Anthropic API Key</Label>
                   <div className="relative">
                     <Input
                       type={showPasswords.openai_key ? 'text' : 'password'}
