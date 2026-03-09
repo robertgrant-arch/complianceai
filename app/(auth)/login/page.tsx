@@ -226,7 +226,7 @@ function LoginForm() {
         </div>
 
         <p className="text-center text-slate-500 text-xs mt-6">
-          ComplianceAI © {new Date().getFullYear()} — Powered by OpenAI GPT-4o
+          ComplianceAI © {new Date().getFullYear()} — Powered by Anthropic Claude
         </p>
       </div>
     </div>
