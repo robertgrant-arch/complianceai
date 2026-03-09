@@ -55,7 +55,7 @@ const cspDirectives = [
   // Fetch / XHR / WebSocket targets.
   [
     "connect-src 'self'",
-    'https://api.openai.com',              // OpenAI Whisper + GPT-4o
+        'https://api.anthropic.com',        // Anthropic Claude
     'https://app.five9.com',               // Five9 SOAP
     'https://api.five9.com',               // Five9 REST (if used)
     `https://*.s3.${process.env.AWS_REGION ?? 'us-east-1'}.amazonaws.com`, // S3 pre-signed
