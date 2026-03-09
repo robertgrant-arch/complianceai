@@ -1,7 +1,7 @@
 /**
  * app/api/settings/route.ts
  *
- * Settings CRUD — stores Five9 credentials, OpenAI keys, Slack webhooks.
+ * Settings CRUD — stores Five9 credentials, Anthropic keys, Slack webhooks.
  *
  * FIX: CRIT-1 — Credentials encrypted at rest and never returned in responses.
  *   - All secret fields (five9Password, openAiKey, slackWebhookUrl) are
@@ -11,8 +11,8 @@
  *     never values).
  *
  * FIX: HIGH-1 — Settings writes require ADMIN (not just ADMIN).
- *   An ADMIN-level user swapping the OpenAI key to one they control would
- *   allow them to read all future transcript data via OpenAI's API logs.
+ *   An ADMIN-level user swapping the Anthropic key to one they control would
+ *   allow them to read all future transcript data via Anthropic's API logs.
  *
  * FIX: MED-5 — ApiError from requireRole is opaque (see lib/auth-helpers.ts).
  */
@@ -40,10 +40,10 @@ const SettingsUpsertSchema = z.object({
   five9Username:  z.string().email().optional(),
   five9Password:  z.string().min(1).max(512).optional(),
 
-  // OpenAI config
+  // Anthropic config
   openAiKey: z
     .string()
-    .regex(/^sk-[A-Za-z0-9\-_]{20,}$/, 'Must be a valid OpenAI API key')
+    .regex(/^sk-[A-Za-z0-9\-_]{20,}$/, 'Must be a valid Anthropic API key')
     .optional(),
 
   // Slack config
