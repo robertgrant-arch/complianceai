@@ -25,7 +25,7 @@ A full-stack compliance auditing platform that integrates with Five9 to automati
 │                    BullMQ Workers                           │
 │  ┌────────────┐  ┌──────────────┐  ┌────────────────────┐  │
 │  │  Ingestion │  │ Transcription│  │     Analysis       │  │
-│  │  (Five9)   │  │  (Whisper)   │  │    (GPT-4o)        │  │
+│  │  (Five9)   │  │  (AWS Transcribe)   │  │    (Claude)        │  │
 │  └────────────┘  └──────────────┘  └────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │           Notification Worker (Slack/Email)            │ │
@@ -49,8 +49,8 @@ A full-stack compliance auditing platform that integrates with Five9 to automati
 | **Database** | PostgreSQL 15 |
 | **Queue** | BullMQ + Redis 7 |
 | **Object Storage** | MinIO (S3-compatible) |
-| **AI Transcription** | OpenAI Whisper |
-| **AI Analysis** | OpenAI GPT-4o |
+| **AI Transcription** | AWS Transcribe |
+| **AI Analysis** | Anthropic Claude |
 | **Call Platform** | Five9 (SOAP API) |
 | **Audio Player** | WaveSurfer.js |
 | **Charts** | Recharts |
@@ -107,7 +107,7 @@ A full-stack compliance auditing platform that integrates with Five9 to automati
 
 ### Settings
 - Five9 SOAP API credentials with connection test
-- OpenAI API key and model selection
+- Anthropic API key and model selection
 - Whisper model selection
 - Slack webhook and email notification configuration
 - Worker concurrency and polling interval
@@ -137,7 +137,7 @@ SystemSetting (key-value store)
 - **User** — Authentication, RBAC roles (ADMIN, SUPERVISOR, AUDITOR, VIEWER)
 - **CallRecord** — Five9 call metadata, S3 audio key, processing status
 - **Transcript** — Whisper output with speaker-diarized segments
-- **AuditResult** — GPT-4o scores, summary, recommended action
+- **AuditResult** — Claude scores, summary, recommended action
 - **AuditFlag** — Individual compliance violations with type/category/timestamp
 - **KeywordList** — Named lists of keywords with type classification
 - **Keyword** — Individual keyword entries linked to lists
@@ -160,7 +160,7 @@ Five9 SOAP API
      ▼
 [Transcription Queue]
   - Download audio from MinIO
-  - Send to OpenAI Whisper API
+  - Send to AWS Transcribe API
   - Parse segments with speaker diarization
   - Save Transcript to database
   - Update status=analyzing
@@ -168,7 +168,7 @@ Five9 SOAP API
      ▼
 [Analysis Queue]
   - Fetch transcript + keyword lists
-  - Build GPT-4o prompt with keyword context
+  - Build Claude prompt with keyword context
   - Parse structured JSON response
   - Run local keyword matching
   - Save AuditResult + AuditFlags
@@ -189,7 +189,7 @@ Five9 SOAP API
 ### Prerequisites
 
 - Docker and Docker Compose
-- OpenAI API key
+- Anthropic API key
 - (Optional) Five9 account credentials
 
 ### 1. Clone and configure
@@ -205,7 +205,7 @@ Edit `.env` with your credentials:
 ```env
 # Required
 NEXTAUTH_SECRET=your-secret-here-min-32-chars
-OPENAI_API_KEY=sk-...
+Anthropic_API_KEY=sk-...
 
 # Five9 (optional for demo mode)
 FIVE9_USERNAME=your@email.com
@@ -277,9 +277,9 @@ npm run worker:dev
 | `REDIS_URL` | Yes | Redis connection string |
 | `NEXTAUTH_SECRET` | Yes | JWT signing secret (32+ chars) |
 | `NEXTAUTH_URL` | Yes | App base URL |
-| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `OPENAI_API_KEY` | Yes | Anthropic API key (stored as OPENAI_API_KEY for backward compat) |
 | `WHISPER_MODEL` | No | Whisper model (default: whisper-1) |
-| `GPT_MODEL` | No | GPT model (default: gpt-4o) |
+| `GPT_MODEL` | No | GPT model (default: Claude) |
 | `FIVE9_USERNAME` | No | Five9 account email |
 | `FIVE9_PASSWORD` | No | Five9 account password |
 | `FIVE9_ENABLED` | No | Enable Five9 polling (default: false) |
@@ -473,7 +473,7 @@ complianceai/
 │   └── processors/
 │       ├── ingestion.processor.ts  # Five9 ingestion
 │       ├── transcription.processor.ts  # Whisper transcription
-│       ├── analysis.processor.ts   # GPT-4o analysis
+│       ├── analysis.processor.ts   # Claude analysis
 │       └── notification.processor.ts   # Slack/email alerts
 ├── prisma/
 │   ├── schema.prisma               # Database schema
