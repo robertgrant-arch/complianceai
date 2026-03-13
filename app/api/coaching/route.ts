@@ -35,19 +35,18 @@ export async function POST(req: NextRequest) {
     await requireAuth();
 
     const body = await req.json();
-    const { agentId, type, title, description, dueDate } = body;
+    const { agentId, title, description, dueAt } = body;
 
-    if (!agentId || !title || !dueDate) {
-      return NextResponse.json({ error: 'agentId, title, and dueDate are required' }, { status: 400 });
+    if (!agentId || !title) {
+      return NextResponse.json({ error: 'agentId and title are required' }, { status: 400 });
     }
 
     const task = await prisma.coachingTask.create({
       data: {
         agentId,
-        type: type ?? 'REVIEW_CALL',
         title,
         description: description ?? null,
-        dueDate: new Date(dueDate),
+        dueAt: dueAt ? new Date(dueAt) : null,
       },
     });
 
@@ -68,12 +67,9 @@ export async function PATCH(req: NextRequest) {
 
     if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
 
-    const data: any = { status };
-    if (status === 'COMPLETED') data.completedAt = new Date();
-
     const task = await prisma.coachingTask.update({
       where: { id },
-      data,
+      data: { status },
     });
 
     return NextResponse.json({ task });
