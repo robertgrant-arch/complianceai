@@ -10,7 +10,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// --- Enums (C-06) ---
+// --- Enums ---
 
 enum UserRole {
   ADMIN
@@ -19,7 +19,6 @@ enum UserRole {
   VIEWER
 }
 
-/// C-06: Replaces String status field on CallRecord
 enum CallStatus {
   PENDING
   TRANSCRIBING
@@ -28,13 +27,11 @@ enum CallStatus {
   ERROR
 }
 
-/// C-06: Replaces String callDirection field on CallRecord
 enum CallDirection {
   INBOUND
   OUTBOUND
 }
 
-/// C-06: Replaces String recommendedAction field on AuditResult
 enum RecommendedAction {
   NONE
   COACHING
@@ -42,21 +39,18 @@ enum RecommendedAction {
   ESCALATE
 }
 
-/// C-06: Replaces String sentimentAgent / sentimentCustomer fields
 enum Sentiment {
   POSITIVE
   NEUTRAL
   NEGATIVE
 }
 
-/// C-06: Replaces String type field on AuditFlag
 enum FlagType {
   CRITICAL
   WARNING
   INFO
 }
 
-/// C-06: Replaces String category field on AuditFlag
 enum FlagCategory {
   COMPLIANCE
   TONE
@@ -67,12 +61,42 @@ enum FlagCategory {
   COMPETITOR
 }
 
-/// C-06 / H-01: Replaces String type field on KeywordList
 enum KeywordListType {
   PROHIBITED
   REQUIRED
   RISK
   COMPETITOR
+}
+
+enum CoachingTaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+}
+
+enum ScorecardType {
+  COMPLIANCE
+  SALES
+  SUPPORT
+}
+
+enum ScorecardItemType {
+  BOOLEAN
+  SCALE
+}
+
+enum ConsentChannel {
+  VOICE
+  SMS
+  EMAIL
+  WEB
+}
+
+enum ExportStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
 }
 
 // --- Models ---
@@ -81,7 +105,7 @@ model User {
   id               String    @id @default(cuid())
   email            String    @unique
   name             String
-  password         String    // bcrypt hash, minimum 12 rounds (C-02)
+  password         String
   role             UserRole  @default(VIEWER)
   isActive         Boolean   @default(true)
   failedLoginCount Int       @default(0)
@@ -89,7 +113,8 @@ model User {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   auditLogs        AuditLog[]
-
+  coachingTasks    CoachingTask[]
+  qaOverrides      QAOverride[]
   @@map("users")
 }
 
@@ -99,24 +124,26 @@ model CallRecord {
   agentId       String
   agentName     String
   campaignName  String
+  leadSource    String?
+  state         String?
   callDirection CallDirection @default(OUTBOUND)
   ani           String?
   dnis          String?
   startTime     DateTime
   endTime       DateTime?
-  duration      Int?          // seconds
+  duration      Int?
   disposition   String?
-  s3Key         String?       // S3/MinIO key for audio file
+  s3Key         String?
   status        CallStatus    @default(PENDING)
   reviewedBy    String?
   reviewedAt    DateTime?
   notes         String?       @db.Text
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
-
-  transcript  CallTranscript?
-  auditResult AuditResult?
-
+  transcript    CallTranscript?
+  auditResult   AuditResult?
+  consentEvents ConsentEvent[]
+  coachingTasks CoachingTask[]
   @@index([agentId])
   @@index([status])
   @@index([startTime])
@@ -126,39 +153,37 @@ model CallRecord {
 }
 
 model CallTranscript {
-  id              String     @id @default(cuid())
-  callRecordId    String     @unique
-  fullText        String     @db.Text
-  segments        Json       // Array of TranscriptSegment
-  wordCount       Int        @default(0)
-  language        String     @default("en")
+  id              String      @id @default(cuid())
+  callRecordId    String      @unique
+  fullText        String      @db.Text
+  segments        Json
+  wordCount       Int         @default(0)
+  language        String      @default("en")
   durationSeconds Float?
-  createdAt       DateTime   @default(now())
-
-  callRecord CallRecord @relation(fields: [callRecordId], references: [id], onDelete: Cascade)
-
+  createdAt       DateTime    @default(now())
+  callRecord      CallRecord  @relation(fields: [callRecordId], references: [id], onDelete: Cascade)
   @@map("call_transcripts")
 }
 
 model AuditResult {
-  id                String            @id @default(cuid())
-  callRecordId      String            @unique
-  overallScore      Int               // 0-100
-  complianceScore   Int               // 0-100
-  toneScore         Int               // 0-100
-  qualityScore      Int               // 0-100
-  summary           String            @db.Text
+  id               String            @id @default(cuid())
+  callRecordId     String            @unique
+  overallScore     Int
+  complianceScore  Int
+  toneScore        Int
+  qualityScore     Int
+  summary          String            @db.Text
   recommendedAction RecommendedAction @default(NONE)
-  sentimentAgent    Sentiment         @default(NEUTRAL)
-  sentimentCustomer Sentiment         @default(NEUTRAL)
-  topicsDiscussed   Json              @default("[]")
-  callOutcome       String?
-  aiModel           String            @default("gpt-4o")
-  createdAt         DateTime          @default(now())
-
-  callRecord CallRecord @relation(fields: [callRecordId], references: [id], onDelete: Cascade)
-  auditFlags AuditFlag[]
-
+  sentimentAgent   Sentiment         @default(NEUTRAL)
+  sentimentCustomer Sentiment        @default(NEUTRAL)
+  topicsDiscussed  Json              @default("[]")
+  callOutcome      String?
+  aiModel          String            @default("claude-3-5-sonnet")
+  createdAt        DateTime          @default(now())
+  callRecord       CallRecord        @relation(fields: [callRecordId], references: [id], onDelete: Cascade)
+  auditFlags       AuditFlag[]
+  qaOverrides      QAOverride[]
+  scorecardResults ScorecardResult[]
   @@map("audit_results")
 }
 
@@ -172,9 +197,7 @@ model AuditFlag {
   keyword       String?
   quote         String?      @db.Text
   createdAt     DateTime     @default(now())
-
-  auditResult AuditResult @relation(fields: [auditResultId], references: [id], onDelete: Cascade)
-
+  auditResult   AuditResult  @relation(fields: [auditResultId], references: [id], onDelete: Cascade)
   @@index([auditResultId])
   @@index([type])
   @@index([auditResultId, type])
@@ -190,7 +213,6 @@ model KeywordList {
   keywords    Json            @default("[]")
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
-
   @@map("keyword_lists")
 }
 
@@ -203,9 +225,7 @@ model AuditLog {
   details    Json?
   ipAddress  String?
   createdAt  DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   @@index([userId])
   @@index([resource])
   @@index([createdAt])
@@ -218,7 +238,6 @@ model SystemSetting {
   value     String   @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
   @@map("system_settings")
 }
 
@@ -230,11 +249,9 @@ model RetentionPolicy {
   deleteRecord Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
-
   @@unique([callStatus])
   @@map("retention_policies")
 }
-
 
 model Settings {
   id               String   @id @default("singleton")
@@ -248,6 +265,163 @@ model Settings {
   scoreThreshold   Int      @default(70)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
-
   @@map("settings")
+}
+
+// --- New: DNC List ---
+model DncEntry {
+  id          String   @id @default(cuid())
+  phone       String   @unique
+  source      String   @default("internal")
+  addedBy     String?
+  reason      String?
+  createdAt   DateTime @default(now())
+  @@index([phone])
+  @@map("dnc_entries")
+}
+
+// --- New: Consent Events ---
+model ConsentEvent {
+  id           String        @id @default(cuid())
+  callRecordId String?
+  phone        String
+  agentId      String
+  channel      ConsentChannel @default(VOICE)
+  consentGiven Boolean
+  wording      String?       @db.Text
+  state        String?
+  campaignId   String?
+  recordedAt   DateTime      @default(now())
+  callRecord   CallRecord?   @relation(fields: [callRecordId], references: [id], onDelete: SetNull)
+  @@index([phone])
+  @@index([agentId])
+  @@map("consent_events")
+}
+
+// --- New: Pre-dial Check Log ---
+model PreDialCheck {
+  id          String   @id @default(cuid())
+  phone       String
+  agentId     String?
+  campaignId  String?
+  leadSource  String?
+  state       String?
+  allowed     Boolean
+  violations  Json     @default("[]")
+  checkedAt   DateTime @default(now())
+  @@index([phone])
+  @@index([checkedAt])
+  @@map("pre_dial_checks")
+}
+
+// --- New: Scorecards ---
+model Scorecard {
+  id        String        @id @default(cuid())
+  name      String
+  type      ScorecardType
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  items     ScorecardItem[]
+  results   ScorecardResult[]
+  campaigns ScorecardCampaign[]
+  @@map("scorecards")
+}
+
+model ScorecardItem {
+  id             String            @id @default(cuid())
+  scorecardId    String
+  code           String
+  description    String
+  category       String
+  weight         Float             @default(1.0)
+  evaluationType ScorecardItemType @default(BOOLEAN)
+  maxScore       Float             @default(1.0)
+  createdAt      DateTime          @default(now())
+  scorecard      Scorecard         @relation(fields: [scorecardId], references: [id], onDelete: Cascade)
+  @@index([scorecardId])
+  @@map("scorecard_items")
+}
+
+model ScorecardCampaign {
+  id          String    @id @default(cuid())
+  scorecardId String
+  campaignName String
+  scorecard   Scorecard @relation(fields: [scorecardId], references: [id], onDelete: Cascade)
+  @@unique([scorecardId, campaignName])
+  @@map("scorecard_campaigns")
+}
+
+model ScorecardResult {
+  id            String      @id @default(cuid())
+  auditResultId String
+  scorecardId   String
+  score         Float
+  itemScores    Json        @default("[]")
+  createdAt     DateTime    @default(now())
+  auditResult   AuditResult @relation(fields: [auditResultId], references: [id], onDelete: Cascade)
+  scorecard     Scorecard   @relation(fields: [scorecardId], references: [id], onDelete: Cascade)
+  @@index([auditResultId])
+  @@map("scorecard_results")
+}
+
+// --- New: QA Overrides (manual QA) ---
+model QAOverride {
+  id            String      @id @default(cuid())
+  auditResultId String
+  userId        String
+  overallScore  Int?
+  comment       String?     @db.Text
+  createdAt     DateTime    @default(now())
+  auditResult   AuditResult @relation(fields: [auditResultId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([auditResultId])
+  @@map("qa_overrides")
+}
+
+// --- New: Coaching Tasks ---
+model CoachingTask {
+  id           String              @id @default(cuid())
+  agentId      String
+  callRecordId String?
+  ruleCode     String?
+  title        String
+  description  String?             @db.Text
+  status       CoachingTaskStatus  @default(OPEN)
+  assignedToId String?
+  dueAt        DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  callRecord   CallRecord?         @relation(fields: [callRecordId], references: [id], onDelete: SetNull)
+  assignedTo   User?               @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  @@index([agentId])
+  @@index([status])
+  @@map("coaching_tasks")
+}
+
+// --- New: Export Cases ---
+model ExportCase {
+  id          String       @id @default(cuid())
+  label       String?
+  callIds     Json         @default("[]")
+  status      ExportStatus @default(PENDING)
+  downloadUrl String?
+  requestedBy String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  @@map("export_cases")
+}
+
+// --- New: Real-time Alert Rules ---
+model AlertRule {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  pattern     String
+  severity    FlagType @default(WARNING)
+  isActive    Boolean  @default(true)
+  campaigns   Json     @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@map("alert_rules")
 }
