@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       data: {
         label: label ?? `Export ${new Date().toISOString()}`,
         callIds,
-        createdBy: (session.user as any)?.id ?? 'unknown',
+        requestedBy: (session.user as any)?.id ?? 'unknown',
       },
     });
 
