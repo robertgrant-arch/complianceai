@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/auth';
+import { requireAuth } from '@/lib/auth-helpers';
 import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    await requireAuth();
 
     const scorecards = await prisma.scorecard.findMany({
       include: { items: true, campaigns: true },
@@ -16,7 +14,8 @@ export async function GET(req: NextRequest) {
     });
 
     return NextResponse.json({ scorecards });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.name === 'ApiError') return error.toResponse();
     console.error('Scorecards GET error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
@@ -24,8 +23,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    await requireAuth();
 
     const body = await req.json();
     const { name, type, items, campaigns } = body;
@@ -36,25 +34,21 @@ export async function POST(req: NextRequest) {
       data: {
         name,
         type,
-        items: items ? {
-          create: items.map((item: any) => ({
-            code: item.code,
-            description: item.description,
+        items: {
+          create: (items || []).map((item: any) => ({
             category: item.category,
-            weight: item.weight ?? 1.0,
-            evaluationType: item.evaluationType ?? 'BOOLEAN',
-            maxScore: item.maxScore ?? 1.0,
+            label: item.label,
+            weight: item.weight ?? 1,
+            scoringType: item.scoringType ?? 'BINARY',
           })),
-        } : undefined,
-        campaigns: campaigns ? {
-          create: campaigns.map((c: string) => ({ campaignName: c })),
-        } : undefined,
+        },
+        campaigns: campaigns ?? [],
       },
-      include: { items: true, campaigns: true },
     });
 
     return NextResponse.json({ scorecard }, { status: 201 });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.name === 'ApiError') return error.toResponse();
     console.error('Scorecards POST error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
