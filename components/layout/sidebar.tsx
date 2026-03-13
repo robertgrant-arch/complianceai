@@ -15,6 +15,10 @@ import {
   ChevronRight,
   Activity,
   UserPlus,
+  CheckCircle,
+  GraduationCap,
+  Star,
+  FileText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +47,30 @@ const navItems: NavItem[] = [
     title: 'Agents',
     href: '/agents',
     icon: Users,
+  },
+  {
+    title: 'Compliance',
+    href: '/compliance',
+    icon: Shield,
+    badge: 'New',
+  },
+  {
+    title: 'Scorecards',
+    href: '/scorecards',
+    icon: Star,
+    badge: 'New',
+  },
+  {
+    title: 'Coaching',
+    href: '/coaching',
+    icon: GraduationCap,
+    badge: 'New',
+  },
+  {
+    title: 'Reports',
+    href: '/reports',
+    icon: FileText,
+    badge: 'New',
   },
   {
     title: 'Settings',
@@ -113,7 +141,6 @@ export function Sidebar() {
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {navItems.map((item) => {
           if (!canAccess(item)) return null;
-
           const hasChildren = item.children && item.children.length > 0;
           const isParentActive = isActive(item.href);
 
@@ -150,7 +177,6 @@ export function Sidebar() {
                   {item.children!.map((child) => {
                     if (!canAccess(child)) return null;
                     const isChildActive = pathname === child.href;
-
                     return (
                       <Link
                         key={child.href}
