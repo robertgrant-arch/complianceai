@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/auth';
+import { requireAuth } from '@/lib/auth-helpers';
 import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    await requireAuth();
 
     const { searchParams } = new URL(req.url);
     const phone = searchParams.get('phone');
@@ -28,7 +26,8 @@ export async function GET(req: NextRequest) {
     ]);
 
     return NextResponse.json({ entries, total, page, limit });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.name === 'ApiError') return error.toResponse();
     console.error('DNC GET error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
@@ -36,8 +35,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    await requireAuth();
 
     const body = await req.json();
     const { phone, source, reason } = body;
@@ -46,12 +44,13 @@ export async function POST(req: NextRequest) {
 
     const entry = await prisma.dncEntry.upsert({
       where: { phone },
-      update: { source: source ?? 'internal', reason: reason ?? null, addedBy: (session.user as any)?.email },
-      create: { phone, source: source ?? 'internal', reason: reason ?? null, addedBy: (session.user as any)?.email },
+      update: { source: source ?? 'MANUAL', reason: reason ?? null },
+      create: { phone, source: source ?? 'MANUAL', reason: reason ?? null },
     });
 
     return NextResponse.json({ entry }, { status: 201 });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.name === 'ApiError') return error.toResponse();
     console.error('DNC POST error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
@@ -59,16 +58,18 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    await requireAuth();
 
     const { searchParams } = new URL(req.url);
     const phone = searchParams.get('phone');
+
     if (!phone) return NextResponse.json({ error: 'phone is required' }, { status: 400 });
 
     await prisma.dncEntry.delete({ where: { phone } });
-    return NextResponse.json({ ok: true });
-  } catch (error) {
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    if (error?.name === 'ApiError') return error.toResponse();
     console.error('DNC DELETE error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
