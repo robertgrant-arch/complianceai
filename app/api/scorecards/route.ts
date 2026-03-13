@@ -36,13 +36,19 @@ export async function POST(req: NextRequest) {
         type,
         items: {
           create: (items || []).map((item: any) => ({
+            code: item.code,
+            description: item.description ?? '',
             category: item.category,
-            label: item.label,
             weight: item.weight ?? 1,
-            scoringType: item.scoringType ?? 'BINARY',
+            evaluationType: item.evaluationType ?? 'BOOLEAN',
+            maxScore: item.maxScore ?? 1.0,
           })),
         },
-        campaigns: campaigns ?? [],
+        campaigns: {
+          create: (campaigns || []).map((c: string) => ({
+            campaignName: c,
+          })),
+        },
       },
     });
 
