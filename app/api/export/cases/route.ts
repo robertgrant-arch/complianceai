@@ -1,21 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/auth';
+import { requireAuth } from '@/lib/auth-helpers';
 import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    await requireAuth();
 
     const cases = await prisma.exportCase.findMany({
       orderBy: { createdAt: 'desc' },
     });
 
     return NextResponse.json({ cases });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.name === 'ApiError') return error.toResponse();
     console.error('Export cases GET error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
@@ -23,8 +22,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const session = await requireAuth();
 
     const body = await req.json();
     const { label, callIds } = body;
@@ -35,18 +33,15 @@ export async function POST(req: NextRequest) {
 
     const exportCase = await prisma.exportCase.create({
       data: {
-        label: label ?? null,
+        label: label ?? `Export ${new Date().toISOString()}`,
         callIds,
-        status: 'PENDING',
-        requestedBy: (session.user as any)?.email ?? null,
+        createdBy: (session.user as any)?.id ?? 'unknown',
       },
     });
 
-    // TODO: enqueue BullMQ job to build the export package
-    // await exportQueue.add('build-export', { caseId: exportCase.id });
-
     return NextResponse.json({ exportCase }, { status: 201 });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.name === 'ApiError') return error.toResponse();
     console.error('Export cases POST error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
